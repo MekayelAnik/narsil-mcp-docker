@@ -14,7 +14,9 @@ readonly DEFAULT_DATA_DIR="/data"
 readonly SAFE_API_KEY_REGEX='^[[:graph:]]+$'
 readonly MIN_API_KEY_LEN=5
 readonly MAX_API_KEY_LEN=256
-readonly FIRST_RUN_FILE="/tmp/first_run_complete"
+readonly STATE_DIR="/state"
+readonly FIRST_RUN_FILE="${STATE_DIR}/first_run_complete"
+readonly REINDEX_DONE_FILE="${STATE_DIR}/.reindex_done"
 readonly HAPROXY_SERVER_NAME="narsil-mcp"
 readonly HAPROXY_TEMPLATE="/etc/haproxy/haproxy.cfg.template"
 readonly HAPROXY_CONFIG="/tmp/haproxy.cfg"
@@ -245,6 +247,10 @@ haproxy_supports_quic() {
         return 1
     fi
     return 0
+}
+
+ensure_state_dir() {
+    mkdir -p "$STATE_DIR"
 }
 
 ensure_parent_dir() {
@@ -509,7 +515,12 @@ build_narsil_args() {
     fi
 
     if is_true "${NARSIL_REINDEX:-false}"; then
-        args="$args --reindex"
+        if [[ -f "$REINDEX_DONE_FILE" ]]; then
+            echo "Reindex already completed this container lifecycle, skipping --reindex"
+        else
+            args="$args --reindex"
+            touch "$REINDEX_DONE_FILE"
+        fi
     fi
 
     if is_true "${NARSIL_HTTP:-false}"; then
@@ -634,6 +645,8 @@ main() {
 
     validate_api_key
     validate_cors
+
+    ensure_state_dir
 
     if [[ ! -f "$FIRST_RUN_FILE" ]]; then
         handle_first_run

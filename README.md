@@ -172,7 +172,7 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | `NARSIL_NEURAL` | `false` | `true`, `false` | Enable neural semantic embeddings |
 | `NARSIL_GRAPH` | `false` | `true`, `false` | Enable SPARQL/RDF knowledge graph and CCG tools |
 | `NARSIL_VERBOSE` | `false` | `true`, `false` | Enable verbose logging |
-| `NARSIL_REINDEX` | `false` | `true`, `false` | Force re-index on startup |
+| `NARSIL_REINDEX` | `false` | `true`, `false` | Force re-index on startup (once per container lifecycle) |
 | `NARSIL_HTTP` | `false` | `true`, `false` | Enable visualization frontend HTTP server |
 
 #### Narsil MCP String Settings
@@ -217,6 +217,16 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | `HTTP_VERSION_MODE` | `auto` | `auto`, `h1`, `h2`, `h3`, `h1+h2`, `all` | HTTP version negotiation |
 
 > **Boolean values:** `true`, `1`, `yes`, `on` are all accepted as truthy. Everything else is falsy.
+
+> **Once per container lifecycle:** `NARSIL_REINDEX` runs only once after the container is created. It is skipped on subsequent restarts (e.g., crash recovery, `docker restart`). To re-trigger, recreate the container (`docker compose down && docker compose up -d`).
+
+#### One-Shot Operations
+
+For ad-hoc operations without setting env vars, use `docker exec`:
+
+```bash
+docker exec narsil-mcp narsil-mcp --repos /data --reindex   # Force full re-index
+```
 
 ---
 

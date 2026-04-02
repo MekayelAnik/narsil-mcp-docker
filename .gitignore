@@ -2,3 +2,4 @@
 Dockerfile.narsil-mcp
 /Dockerfile.narsil-mcp
 /Dockerfile
+node-compile-cache

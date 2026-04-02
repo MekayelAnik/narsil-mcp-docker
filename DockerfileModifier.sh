@@ -78,8 +78,8 @@ RUN --mount=type=cache,target=/root/.npm \\
     rm -rf /tmp/* /var/tmp/* && \\
     rm -rf /usr/local/lib/node_modules/npm/man /usr/local/lib/node_modules/npm/docs /usr/local/lib/node_modules/npm/html
 
-# Create default data directory for repository mounting
-RUN mkdir -p /data && chown 1000:1000 /data
+# Create default data directory for repository mounting and state directory for lifecycle sentinels
+RUN mkdir -p /data /state && chown 1000:1000 /data /state
 
 # Use an ARG for the default port
 ARG PORT=8010
