@@ -163,10 +163,10 @@ Run on **Host Server machine**.
 ### 3.1 Start/restart container with TLS enabled
 
 ```bash
-docker rm -f context7-mcp 2>/dev/null || true
+docker rm -f narsil-mcp 2>/dev/null || true
 
 docker run -d \
-  --name context7-mcp \
+  --name narsil-mcp \
   --restart unless-stopped \
   -p 7010:7010 \
   -e PORT=7010 \
@@ -176,13 +176,13 @@ docker run -d \
   -e HTTP_VERSION_MODE=auto \
   -e API_KEY=ctx7_REPLACE_WITH_A_LONG_RANDOM_SECRET \
   -v /home/$USER/mcp-certs/103.102.201.202:/certs:ro \
-  mekayelanik/context7-mcp:stable
+  mekayelanik/narsil-mcp:stable
 ```
 
 ### 3.2 Check runtime logs
 
 ```bash
-docker logs -f context7-mcp
+docker logs -f narsil-mcp
 ```
 
 You want to see HTTPS enabled and no certificate path errors.
