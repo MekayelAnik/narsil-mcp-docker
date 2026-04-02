@@ -1,0 +1,48 @@
+services:
+  narsil-mcp:
+    image: mekayelanik/narsil-mcp:latest
+    container_name: narsil-mcp
+    environment:
+      - PORT=8010
+      - INTERNAL_PORT=38011
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - NODE_ENV=production
+      - PROTOCOL=SHTTP
+      - ENABLE_HTTPS=false
+      - HTTP_VERSION_MODE=auto
+      - DATA_DIR=/data
+      # Narsil MCP feature flags
+      - NARSIL_GIT=true
+      - NARSIL_CALL_GRAPH=true
+      - NARSIL_PERSIST=true
+      - NARSIL_WATCH=false
+      - NARSIL_STREAMING=true
+      - NARSIL_VERBOSE=false
+      # - NARSIL_NEURAL=true
+      # - NARSIL_NEURAL_BACKEND=api
+      # - NARSIL_NEURAL_MODEL=voyage-code-2
+      # - NARSIL_GRAPH=true
+      # - NARSIL_LSP=true
+      # - NARSIL_REMOTE=true
+      # - NARSIL_PRESET=full
+      # Neural embedding API keys (uncomment as needed)
+      # - EMBEDDING_API_KEY=your-api-key
+      # - VOYAGE_API_KEY=your-voyage-key
+      # - OPENAI_API_KEY=your-openai-key
+      # - EMBEDDING_SERVER_ENDPOINT=http://custom-endpoint
+      # Optional: require Bearer token auth at HAProxy layer
+      # - API_KEY=replace-with-strong-secret
+      # Optional: CORS origins (comma-separated, or * for all)
+      # - CORS=*
+    ports:
+      - "8010:8010"
+    volumes:
+      # Mount your repository directories for code analysis
+      # Each subdirectory becomes an indexable repository
+      - /path/to/your/repos:/data:ro
+      # Example: mount individual repos
+      # - /home/user/my-rust-project:/data/my-rust-project:ro
+      # - /home/user/another-repo:/data/another-repo:ro
+    restart: unless-stopped

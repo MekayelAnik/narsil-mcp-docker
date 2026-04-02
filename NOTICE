@@ -1,0 +1,27 @@
+narsil-mcp-docker
+Copyright (C) 2026 Mohammad Mekayel Anik
+
+This Docker image packaging is licensed under the GNU General Public License v3.0 (GPLv3).
+See the LICENSE file for the full license text.
+
+================================================================================
+UPSTREAM SOFTWARE NOTICE
+================================================================================
+
+This Docker image packages the following upstream software:
+
+1. Narsil MCP Server (https://github.com/postrv/narsil-mcp)
+   Copyright (c) 2024 postrv
+   Licensed under MIT License OR Apache License, Version 2.0 (dual license)
+   Full MIT license: https://github.com/postrv/narsil-mcp/blob/main/LICENSE-MIT
+   Full Apache license: https://github.com/postrv/narsil-mcp/blob/main/LICENSE-APACHE
+
+2. Supergateway (https://github.com/nicholasgasior/supergateway)
+   Licensed under the MIT License
+
+3. HAProxy (https://www.haproxy.org/)
+   Licensed under the GNU General Public License v2.0
+
+This Docker image is an UNOFFICIAL community packaging. It is NOT affiliated
+with, endorsed by, or supported by the narsil-mcp authors. For official
+narsil-mcp support, visit https://github.com/postrv/narsil-mcp/issues.
