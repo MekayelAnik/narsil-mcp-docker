@@ -682,6 +682,9 @@ main() {
         fi
     done
 
+    # Mark all mounted repos as safe for git (ownership may differ from container user)
+    git config --global --add safe.directory '*'
+
     # List mounted repositories
     echo "=========================================="
     echo "Narsil MCP Server - Repository Directory"
