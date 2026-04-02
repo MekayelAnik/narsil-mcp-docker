@@ -7,8 +7,8 @@
 <p align="center">
   <a href="https://hub.docker.com/r/mekayelanik/narsil-mcp"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/mekayelanik/narsil-mcp?style=flat-square&logo=docker"></a>
   <a href="https://hub.docker.com/r/mekayelanik/narsil-mcp"><img alt="Docker Stars" src="https://img.shields.io/docker/stars/mekayelanik/narsil-mcp?style=flat-square&logo=docker"></a>
-  <a href="https://github.com/mekayelanik/narsil-mcp-docker/pkgs/container/narsil-mcp"><img alt="GHCR" src="https://img.shields.io/badge/GHCR-ghcr.io%2Fmekayelanik%2Fnarsil-mcp-blue?style=flat-square&logo=github"></a>
-  <a href="https://github.com/mekayelanik/narsil-mcp-docker/blob/main/LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square"></a>
+  <a href="https://github.com/MekayelAnik/narsil-mcp-docker/pkgs/container/narsil-mcp"><img alt="GHCR" src="https://img.shields.io/badge/GHCR-ghcr.io%2Fmekayelanik%2Fnarsil-mcp-blue?style=flat-square&logo=github"></a>
+  <a href="https://github.com/MekayelAnik/narsil-mcp-docker/blob/main/LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square"></a>
   <a href="https://hub.docker.com/r/mekayelanik/narsil-mcp"><img alt="Platforms" src="https://img.shields.io/badge/Platforms-amd64%20%7C%20arm64-lightgrey?style=flat-square"></a>
   <a href="https://github.com/MekayelAnik/narsil-mcp-docker/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/MekayelAnik/narsil-mcp-docker?style=flat-square"></a>
   <a href="https://github.com/MekayelAnik/narsil-mcp-docker/forks"><img alt="GitHub Forks" src="https://img.shields.io/github/forks/MekayelAnik/narsil-mcp-docker?style=flat-square"></a>
