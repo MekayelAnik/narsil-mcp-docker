@@ -22,7 +22,7 @@ on:
         type: string
         default: ''
       version_range:
-        description: 'Version range to build (e.g. 1.6.0-1.6.1). All available versions within this range will be built.'
+        description: 'Version range to build (e.g. 1.0.0-1.6.1). All available versions within this range will be built.'
         required: false
         type: string
         default: ''
@@ -358,24 +358,28 @@ jobs:
           ref: main
           token: ${{ github.token }}
 
-      - name: Update version in README
+      - name: Update version in README and workflow UI
         shell: bash
         run: |
           set -euo pipefail
           LATEST="${{ needs.fetch-releases.outputs.latest_version }}"
-          echo "Updating README to version $LATEST"
+          echo "Updating README and workflow UI to version $LATEST"
 
           sed -i -E "s/\| \`[0-9]+\.[0-9]+\.[0-9]+\` \|(.+)\| Specific version/| \`${LATEST}\` |\1| Specific version/" README.md
 
-          if git diff --quiet README.md; then
-            echo "README already up to date"
+          # Update workflow UI: version_range description with latest version
+          WORKFLOW_FILE=".github/workflows/monitor-npm-releases.yml"
+          sed -i -E "s/(Version range to build \(e\.g\. )[0-9]+\.[0-9]+\.[0-9]+-[0-9]+\.[0-9]+\.[0-9]+/\11.0.0-${LATEST}/" "$WORKFLOW_FILE"
+
+          if git diff --quiet README.md "$WORKFLOW_FILE"; then
+            echo "Already up to date"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "docs: update README version to ${LATEST}"
+          git add README.md "$WORKFLOW_FILE"
+          git commit -m "docs: update version to ${LATEST} in README and workflow UI"
           git push
 
   update-dockerhub-description:
