@@ -527,7 +527,31 @@ build_narsil_args() {
         args="$args --http"
     fi
 
+    if is_true "${NARSIL_NO_CACHE:-false}"; then
+        args="$args --no-cache"
+    fi
+
     # String-value env vars
+    if [[ -n "${NARSIL_INDEX_PATH:-}" ]]; then
+        args="$args --index-path ${NARSIL_INDEX_PATH}"
+    fi
+
+    if [[ -n "${NARSIL_DISCOVER:-}" ]]; then
+        args="$args --discover ${NARSIL_DISCOVER}"
+    fi
+
+    if [[ -n "${NARSIL_HTTP_PORT:-}" ]]; then
+        args="$args --http-port ${NARSIL_HTTP_PORT}"
+    fi
+
+    if [[ -n "${NARSIL_CACHE_TTL:-}" ]]; then
+        args="$args --cache-ttl ${NARSIL_CACHE_TTL}"
+    fi
+
+    if [[ -n "${NARSIL_GRAPH_PATH:-}" ]]; then
+        args="$args --graph-path ${NARSIL_GRAPH_PATH}"
+    fi
+
     if [[ -n "${NARSIL_NEURAL_BACKEND:-}" ]]; then
         args="$args --neural-backend ${NARSIL_NEURAL_BACKEND}"
     fi
