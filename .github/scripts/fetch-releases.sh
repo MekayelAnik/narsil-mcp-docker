@@ -4,7 +4,7 @@ set -euo pipefail
 REQUESTED_ACTION="${REQUESTED_ACTION:-auto-check}"
 MANUAL_VERSIONS_RAW="${MANUAL_VERSIONS_RAW:-}"
 VERSION_RANGE="${VERSION_RANGE:-}"
-NPM_PACKAGE="${NPM_PACKAGE:-snyk}"
+NPM_PACKAGE="${NPM_PACKAGE:-narsil-mcp}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
 MAX_VERSIONS="${MAX_VERSIONS:-10}"
 EXCLUDE_VERSIONS="${EXCLUDE_VERSIONS:-}"
@@ -37,7 +37,7 @@ if [[ -n "$MANUAL_VERSIONS_RAW" && "$REQUESTED_ACTION" == "build-versions" ]]; t
     LATEST_VERSION="$(echo "$VERSIONS_NEWEST" | head -n1)"
 elif [[ "$REQUESTED_ACTION" == "build-range" ]]; then
     if [[ -z "$VERSION_RANGE" ]]; then
-        echo "::error::build-range action requires a version_range input (e.g. 1.1303.0-1.1303.2)"
+        echo "::error::build-range action requires a version_range input (e.g. 1.6.0-1.6.1)"
         echo "versions_json=[]" >> "$GITHUB_OUTPUT"
         echo "latest_version=" >> "$GITHUB_OUTPUT"
         echo "should_build=false" >> "$GITHUB_OUTPUT"
@@ -48,7 +48,7 @@ elif [[ "$REQUESTED_ACTION" == "build-range" ]]; then
     RANGE_END="$(echo "$VERSION_RANGE" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+\.[0-9]+\.[0-9]+)$/\2/')"
 
     if [[ "$RANGE_START" == "$VERSION_RANGE" || "$RANGE_END" == "$VERSION_RANGE" ]]; then
-        echo "Invalid version range format: '$VERSION_RANGE'. Expected format: X.Y.Z-A.B.C (e.g. 1.1303.0-1.1303.2)" >&2
+        echo "Invalid version range format: '$VERSION_RANGE'. Expected format: X.Y.Z-A.B.C (e.g. 1.6.0-1.6.1)" >&2
         echo "versions_json=[]" >> "$GITHUB_OUTPUT"
         echo "latest_version=" >> "$GITHUB_OUTPUT"
         echo "should_build=false" >> "$GITHUB_OUTPUT"
@@ -58,7 +58,7 @@ elif [[ "$REQUESTED_ACTION" == "build-range" ]]; then
     # Validate range direction: start must be <= end
     RANGE_LOWER="$(printf '%s\n%s' "$RANGE_START" "$RANGE_END" | sort -V | head -n1)"
     if [[ "$RANGE_LOWER" != "$RANGE_START" ]]; then
-        echo "::error::Version range is reversed: $RANGE_START is greater than $RANGE_END. Use format: LOWER-HIGHER (e.g. 1.1303.0-1.1303.2)"
+        echo "::error::Version range is reversed: $RANGE_START is greater than $RANGE_END. Use format: LOWER-HIGHER (e.g. 1.6.0-1.6.1)"
         echo "versions_json=[]" >> "$GITHUB_OUTPUT"
         echo "latest_version=" >> "$GITHUB_OUTPUT"
         echo "should_build=false" >> "$GITHUB_OUTPUT"
