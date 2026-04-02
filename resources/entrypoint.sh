@@ -646,6 +646,17 @@ main() {
     export NARSIL_CALL_GRAPH="${NARSIL_CALL_GRAPH:-false}"
     export NARSIL_NEURAL="${NARSIL_NEURAL:-false}"
     export NARSIL_GRAPH="${NARSIL_GRAPH:-false}"
+
+    # Export upstream narsil-mcp environment variables (read directly by narsil-mcp, not CLI args)
+    export NARSIL_ENABLED_CATEGORIES="${NARSIL_ENABLED_CATEGORIES:-}"
+    export NARSIL_DISABLED_TOOLS="${NARSIL_DISABLED_TOOLS:-}"
+
+    # Export neural embedding API keys (read directly by narsil-mcp)
+    export EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
+    export VOYAGE_API_KEY="${VOYAGE_API_KEY:-}"
+    export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+    export EMBEDDING_SERVER_ENDPOINT="${EMBEDDING_SERVER_ENDPOINT:-}"
+
     /usr/local/bin/banner.sh
 
     # Ensure data directory exists and has correct ownership
