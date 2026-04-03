@@ -20,9 +20,8 @@ frontend mcp_frontend
     bind *:__SERVER_PORT__ __BIND_PARAMS__
     __QUIC_BIND_LINE__
 
-    # Define ACL for health check endpoint from localhost
+    # Define ACL for health check endpoint
     acl is_health_check path /healthz
-    acl is_localhost src 127.0.0.1 ::1
 
     # Define ACL that's always false (for CORS disabled scenario)
     acl always_false always_false
@@ -38,7 +37,7 @@ frontend mcp_frontend
     # Handle CORS preflight (OPTIONS) requests BEFORE auth (browsers don't send credentials on preflight)
     http-request return status 204 hdr "Access-Control-Allow-Origin" "%[var(txn.origin)]" hdr "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE, OPTIONS" hdr "Access-Control-Allow-Headers" "Authorization, Content-Type, X-Requested-With" hdr "Access-Control-Max-Age" "86400" if METH_OPTIONS __CORS_PREFLIGHT_CONDITION__
 
-    # Skip API key check only for health check from localhost
+    # Skip API key check for health check endpoint (always unauthenticated)
     __API_KEY_CHECK__
 
     # Add CORS headers to all responses
