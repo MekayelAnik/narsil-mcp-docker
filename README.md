@@ -78,6 +78,8 @@ services:
     restart: unless-stopped
     ports:
       - "8010:8010"
+      # Optional: HTTP visualization frontend (requires NARSIL_HTTP=true)
+      # - "3000:3000"
     volumes:
       - /path/to/your/repos:/data:ro
     environment:
@@ -98,6 +100,9 @@ services:
       # Optional: Neural semantic search
       # - NARSIL_NEURAL=true
       # - VOYAGE_API_KEY=your-voyage-key
+      # Optional: HTTP visualization frontend
+      # - NARSIL_HTTP=true
+      # - NARSIL_HTTP_PORT=3000
       # Optional: require Bearer token auth at HAProxy layer
       # - API_KEY=replace-with-strong-secret
       # Optional: CORS origins
@@ -118,6 +123,21 @@ docker run -d \
   -e NARSIL_CALL_GRAPH=true \
   -e NARSIL_PERSIST=true \
   mekayelanik/narsil-mcp:latest
+
+# With HTTP visualization frontend enabled:
+docker run -d \
+  --name=narsil-mcp \
+  --restart=unless-stopped \
+  -p 8010:8010 \
+  -p 3000:3000 \
+  -v /path/to/your/repos:/data:ro \
+  -e PORT=8010 \
+  -e PROTOCOL=SHTTP \
+  -e NARSIL_GIT=true \
+  -e NARSIL_CALL_GRAPH=true \
+  -e NARSIL_PERSIST=true \
+  -e NARSIL_HTTP=true \
+  mekayelanik/narsil-mcp:latest
 ```
 
 ### Access Endpoints
@@ -127,6 +147,7 @@ docker run -d \
 | **MCP (SHTTP)** | `http://host-ip:8010/mcp` | Streamable HTTP MCP endpoint (recommended) |
 | **MCP (SSE)** | `http://host-ip:8010/sse` | Server-Sent Events MCP endpoint |
 | **MCP (WS)** | `ws://host-ip:8010/message` | WebSocket MCP endpoint |
+| **HTTP Frontend** | `http://host-ip:3000` | Visualization frontend (requires `NARSIL_HTTP=true`) |
 | **Health** | `http://host-ip:8010/healthz` | Health check endpoint |
 
 When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
@@ -179,6 +200,12 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 
 | Variable | Default | Possible Values | Description |
 |:---------|:-------:|:----------------|:------------|
+| `NARSIL_INDEX_PATH` | `~/.cache/narsil-mcp` | Any path | Custom persistent index storage path |
+| `NARSIL_DISCOVER` | *(empty)* | Directory path | Auto-discover repositories in a directory path |
+| `NARSIL_HTTP_PORT` | `3000` | `1`-`65535` | HTTP visualization frontend port |
+| `NARSIL_NO_CACHE` | `false` | `true`, `false` | Disable analysis caching |
+| `NARSIL_CACHE_TTL` | `1800` | Integer (seconds) | Cache TTL in seconds |
+| `NARSIL_GRAPH_PATH` | `<index_path>/graph` | Any path | Custom knowledge graph storage path |
 | `NARSIL_NEURAL_BACKEND` | *(empty)* | `api`, `onnx` | Neural embedding backend |
 | `NARSIL_NEURAL_MODEL` | *(empty)* | `voyage-code-2`, `text-embedding-3-large`, etc. | Neural model to use |
 | `NARSIL_NEURAL_DIMENSION` | *(empty)* | Integer (e.g. `3072`) | Override embedding dimensions |
@@ -219,6 +246,8 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 > **Boolean values:** `true`, `1`, `yes`, `on` are all accepted as truthy. Everything else is falsy.
 
 > **Once per container lifecycle:** `NARSIL_REINDEX` runs only once after the container is created. It is skipped on subsequent restarts (e.g., crash recovery, `docker restart`). To re-trigger, recreate the container (`docker compose down && docker compose up -d`).
+
+> **Healthcheck:** The container's healthcheck has a 60-second start period to accommodate slow startups, especially when `NARSIL_REINDEX=true` or `NARSIL_NEURAL=true` triggers initial indexing or model loading.
 
 #### One-Shot Operations
 
