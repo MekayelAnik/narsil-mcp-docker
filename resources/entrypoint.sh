@@ -380,7 +380,7 @@ generate_haproxy_config() {
     if [[ -n "$API_KEY" ]]; then
         local escaped_key_sed
         escaped_key_sed="$(escape_sed_replacement "$API_KEY")"
-        api_key_check="    # API Key authentication enabled (localhost /healthz excluded)
+        api_key_check="    # API Key authentication enabled (/healthz always excluded)
     acl auth_header_present var(txn.auth_header) -m found
 
     # Extract token: strip 'Bearer ' prefix (case-insensitive) into txn.api_token
@@ -389,11 +389,9 @@ generate_haproxy_config() {
     # Validate extracted token via exact string match (no regex escaping issues)
     acl auth_valid var(txn.api_token) -m str ${escaped_key_sed}
 
-    # Deny requests without valid authentication (except localhost health checks)
+    # Deny requests without valid authentication (health checks always bypass auth)
     http-request deny deny_status 401 content-type \"application/json\" string '{\"error\":\"Unauthorized\",\"message\":\"Valid API key required\"}' if !is_health_check !auth_header_present
-    http-request deny deny_status 401 content-type \"application/json\" string '{\"error\":\"Unauthorized\",\"message\":\"Valid API key required\"}' if is_health_check !is_localhost !auth_header_present
-    http-request deny deny_status 403 content-type \"application/json\" string '{\"error\":\"Forbidden\",\"message\":\"Invalid API key\"}' if !is_health_check auth_header_present !auth_valid
-    http-request deny deny_status 403 content-type \"application/json\" string '{\"error\":\"Forbidden\",\"message\":\"Invalid API key\"}' if is_health_check !is_localhost auth_header_present !auth_valid"
+    http-request deny deny_status 403 content-type \"application/json\" string '{\"error\":\"Forbidden\",\"message\":\"Invalid API key\"}' if !is_health_check auth_header_present !auth_valid"
     else
         api_key_check="    # API Key authentication disabled - all requests allowed"
     fi
@@ -708,6 +706,9 @@ main() {
 
     # Mark all mounted repos as safe for git (ownership may differ from container user)
     git config --global --add safe.directory '*'
+    if [ "$(id -u)" -eq 0 ]; then
+        su-exec node git config --global --add safe.directory '*'
+    fi
 
     # List mounted repositories
     echo "=========================================="
