@@ -724,7 +724,7 @@ start_mcp_server() {
     echo "Narsil MCP args: ${narsil_args}"
 
     if [ "$(id -u)" -eq 0 ]; then
-        su-exec node "${CMD_ARGS[@]}" &
+        gosu node "${CMD_ARGS[@]}" &
     else
         "${CMD_ARGS[@]}" &
     fi
@@ -834,7 +834,7 @@ main() {
     # Mark all mounted repos as safe for git (ownership may differ from container user)
     git config --global --add safe.directory '*'
     if [ "$(id -u)" -eq 0 ]; then
-        su-exec node git config --global --add safe.directory '*'
+        gosu node git config --global --add safe.directory '*'
     fi
 
     # List mounted repositories
