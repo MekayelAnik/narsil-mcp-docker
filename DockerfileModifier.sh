@@ -103,7 +103,7 @@ ARG API_KEY=""
 
 # NVIDIA GPU support (used when host passes --gpus or NVIDIA container runtime)
 ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV NVIDIA_DRIVER_CAPABILITIES=all
 
 # Set an ENV variable from the ARG for runtime
 ENV PORT=\${PORT}
