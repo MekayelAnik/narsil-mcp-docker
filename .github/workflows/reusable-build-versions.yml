@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: 'haproxy:lts'
+      rust_base_image:
+        description: Rust builder image for compiling narsil-mcp from source
+        required: false
+        type: string
+        default: 'ghcr.io/mekayelanik/base-images/rust:slim-trixie'
       ghcr_repo:
         description: GHCR repository
         required: true
@@ -194,6 +199,7 @@ jobs:
           echo "dockerhub_repo=$(trim '${{ inputs.dockerhub_repo }}')" >> "$GITHUB_OUTPUT"
           echo "base_image_default=$(trim '${{ inputs.base_image_default }}')" >> "$GITHUB_OUTPUT"
           echo "haproxy_image=$(trim '${{ inputs.haproxy_image }}')" >> "$GITHUB_OUTPUT"
+          echo "rust_base_image=$(trim '${{ inputs.rust_base_image }}')" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -250,6 +256,16 @@ jobs:
           fi
           echo "Using HAProxy image: $HAPROXY_IMG"
           echo "$HAPROXY_IMG" > ./build_data/haproxy-image
+
+          # Resolve Rust builder image with fallback
+          RUST_IMG="${{ steps.sanitize.outputs.rust_base_image }}"
+          if ! crane digest "$RUST_IMG" >/dev/null 2>&1; then
+            RUST_FALLBACK="${RUST_IMG##*/}"
+            echo "Rust image '$RUST_IMG' not available, falling back to '$RUST_FALLBACK'"
+            RUST_IMG="$RUST_FALLBACK"
+          fi
+          echo "Using Rust builder image: $RUST_IMG"
+          echo "$RUST_IMG" > ./build_data/rust-image
 
           echo "${{ matrix.version }}" > ./build_data/version
           touch ./build_data/build

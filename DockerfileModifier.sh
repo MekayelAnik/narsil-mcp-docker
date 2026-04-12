@@ -5,6 +5,7 @@ REPO_NAME='narsil-mcp'
 BASE_IMAGE=$(cat ./build_data/base-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/node:current-trixie-slim")
 HAPROXY_IMAGE=$(cat ./build_data/haproxy-image 2>/dev/null || echo "haproxy:lts")
 NARSIL_VERSION=$(cat ./build_data/version 2>/dev/null || exit 1)
+RUST_BASE_IMAGE=$(cat ./build_data/rust-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/rust:slim-trixie")
 NARSIL_REPO='postrv/narsil-mcp'
 SUPERGATEWAY_PKG='supergateway@latest'
 DOCKERFILE_NAME="Dockerfile.$REPO_NAME"
@@ -33,7 +34,7 @@ FROM $HAPROXY_IMAGE AS haproxy-src
 FROM $BASE_IMAGE AS node-src
 
 # ── Rust build stage: compile narsil-mcp with embedded frontend ──
-FROM ghcr.io/mekayelanik/base-images/rust:slim-trixie AS rust-builder
+FROM $RUST_BASE_IMAGE AS rust-builder
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
     git ca-certificates pkg-config libssl-dev build-essential && \\
