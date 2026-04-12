@@ -93,7 +93,7 @@ RUN --mount=type=cache,target=/root/.npm \\
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 # Create default data directory for repository mounting and state directory for lifecycle sentinels
-RUN mkdir -p /data /state && chown 1000:1000 /data /state
+RUN mkdir -p /data /state && chown node:node /data /state
 
 # Use an ARG for the default port
 ARG PORT=8010

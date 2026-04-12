@@ -5,6 +5,8 @@ readonly DEFAULT_PUID=1000
 readonly DEFAULT_PGID=1000
 readonly DEFAULT_PORT=8010
 readonly DEFAULT_INTERNAL_PORT=38011
+readonly DEFAULT_WEB_UI_PORT=4747
+readonly WEB_UI_INTERNAL_PORT=39013
 readonly DEFAULT_PROTOCOL="SHTTP"
 readonly DEFAULT_TLS_DAYS=365
 readonly DEFAULT_TLS_CN="localhost"
@@ -130,6 +132,30 @@ validate_api_key() {
     fi
 
     export API_KEY
+}
+
+validate_web_auth() {
+    WEB_USERNAME="${WEB_USERNAME:-}"
+    WEB_PASSWORD="${WEB_PASSWORD:-}"
+    WEB_USERNAME="$(trim "$WEB_USERNAME")"
+    WEB_PASSWORD="$(trim "$WEB_PASSWORD")"
+
+    if [[ -z "$WEB_USERNAME" && -z "$WEB_PASSWORD" ]]; then
+        export WEB_USERNAME="" WEB_PASSWORD=""
+        return
+    fi
+
+    if [[ -z "$WEB_USERNAME" || -z "$WEB_PASSWORD" ]]; then
+        echo "Both WEB_USERNAME and WEB_PASSWORD must be set (or both unset)." >&2
+        exit 1
+    fi
+
+    if (( ${#WEB_PASSWORD} < 8 )); then
+        echo "WEB_PASSWORD must be at least 8 characters." >&2
+        exit 1
+    fi
+
+    export WEB_USERNAME WEB_PASSWORD
 }
 
 validate_rate_limit() {
@@ -553,6 +579,44 @@ generate_haproxy_config() {
         cors_response_condition="{ always_false }"
     fi
 
+    # Web UI Basic auth (username/password)
+    local web_auth_userlist
+    local web_auth_check
+
+    if [[ -n "$WEB_USERNAME" && -n "$WEB_PASSWORD" ]]; then
+        local hashed_password
+        hashed_password="$(openssl passwd -5 "$WEB_PASSWORD")"
+        web_auth_userlist="userlist web_users
+    user ${WEB_USERNAME} password ${hashed_password}"
+        web_auth_check="    # Web UI Basic auth enabled
+    acl is_basic_auth req.hdr(Authorization) -m found
+    http-request auth realm NarsilMCP if !is_health_check !is_basic_auth !{ http_auth(web_users) }
+    http-request deny deny_status 401 content-type \"application/json\" string '{\"error\":\"Unauthorized\",\"message\":\"Invalid credentials\"}' if !is_health_check is_basic_auth !{ http_auth(web_users) }"
+        echo "Web UI authentication enabled for user: ${WEB_USERNAME}"
+    else
+        web_auth_userlist="# Web UI authentication disabled"
+        web_auth_check="    # Web UI authentication disabled"
+    fi
+
+    # Web UI frontend/backend (only if NARSIL_HTTP is enabled)
+    local web_ui_frontend
+    local web_ui_backend
+
+    if is_true "${NARSIL_HTTP:-false}"; then
+        web_ui_frontend="frontend web_ui_frontend
+    bind *:${WEB_UI_PORT}
+    acl is_health_check path /healthz
+    ${web_auth_check}
+    default_backend web_ui_backend"
+        web_ui_backend="backend web_ui_backend
+    balance roundrobin
+    server narsil-http 127.0.0.1:${WEB_UI_INTERNAL_PORT}"
+        echo "Web UI enabled on port ${WEB_UI_PORT} (proxied via HAProxy)"
+    else
+        web_ui_frontend="# Web UI disabled (set NARSIL_HTTP=true to enable)"
+        web_ui_backend="# Web UI backend disabled"
+    fi
+
     local escaped_bind_params
     local escaped_quic_bind_line
     escaped_bind_params="$(escape_sed_replacement "$BIND_PARAMS")"
@@ -569,12 +633,17 @@ generate_haproxy_config() {
 
     awk -v replacement="$api_key_check" -v replacement_cors="$cors_check" \
         -v replacement_rate_table="$rate_limit_table" -v replacement_rate_check="$rate_limit_check" \
-        -v replacement_ip_access="$ip_access_check" '
+        -v replacement_ip_access="$ip_access_check" \
+        -v replacement_web_userlist="$web_auth_userlist" \
+        -v replacement_web_ui_frontend="$web_ui_frontend" -v replacement_web_ui_backend="$web_ui_backend" '
         /__API_KEY_CHECK__/ { print replacement; next }
         /__CORS_CHECK__/ { print replacement_cors; next }
         /__RATE_LIMIT_TABLE__/ { print replacement_rate_table; next }
         /__RATE_LIMIT_CHECK__/ { print replacement_rate_check; next }
         /__IP_ACCESS_CHECK__/ { print replacement_ip_access; next }
+        /__WEB_AUTH_USERLIST__/ { print replacement_web_userlist; next }
+        /__WEB_UI_FRONTEND__/ { print replacement_web_ui_frontend; next }
+        /__WEB_UI_BACKEND__/ { print replacement_web_ui_backend; next }
         { print }
     ' "${HAPROXY_CONFIG}.tmp" > "$HAPROXY_CONFIG"
 
@@ -647,7 +716,7 @@ build_narsil_args() {
     fi
 
     if is_true "${NARSIL_HTTP:-false}"; then
-        args="$args --http"
+        args="$args --http --http-port ${WEB_UI_INTERNAL_PORT}"
     fi
 
     if is_true "${NARSIL_NO_CACHE:-false}"; then
@@ -663,9 +732,7 @@ build_narsil_args() {
         args="$args --discover ${NARSIL_DISCOVER}"
     fi
 
-    if [[ -n "${NARSIL_HTTP_PORT:-}" ]]; then
-        args="$args --http-port ${NARSIL_HTTP_PORT}"
-    fi
+    # NARSIL_HTTP_PORT controls the HAProxy-exposed web UI port, not the internal narsil port
 
     if [[ -n "${NARSIL_CACHE_TTL:-}" ]]; then
         args="$args --cache-ttl ${NARSIL_CACHE_TTL}"
@@ -784,13 +851,17 @@ main() {
     CORS="${CORS:-}"
     DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
 
+    WEB_UI_PORT="${NARSIL_HTTP_PORT:-$DEFAULT_WEB_UI_PORT}"
+
     PORT="$(validate_port "PORT" "$PORT" "$DEFAULT_PORT")"
     INTERNAL_PORT="$(validate_port "INTERNAL_PORT" "$INTERNAL_PORT" "$DEFAULT_INTERNAL_PORT")"
+    WEB_UI_PORT="$(validate_port "WEB_UI_PORT" "$WEB_UI_PORT" "$DEFAULT_WEB_UI_PORT")"
     TLS_DAYS="$(validate_tls_days "$TLS_DAYS" "$DEFAULT_TLS_DAYS")"
     TLS_MIN_VERSION="$(validate_tls_min_version "$TLS_MIN_VERSION" "$DEFAULT_TLS_MIN_VERSION")"
     HTTP_VERSION_MODE="$(normalize_http_version_mode "$HTTP_VERSION_MODE")"
 
     validate_api_key
+    validate_web_auth
     validate_rate_limit
     validate_ip_access
     validate_cors
@@ -802,7 +873,7 @@ main() {
     fi
 
     # Export variables for banner.sh (runs as child process)
-    export PORT PUID PGID PROTOCOL DATA_DIR
+    export PORT PUID PGID WEB_UI_PORT PROTOCOL DATA_DIR
     export NARSIL_PRESET="${NARSIL_PRESET:-}"
     export NARSIL_GIT="${NARSIL_GIT:-false}"
     export NARSIL_CALL_GRAPH="${NARSIL_CALL_GRAPH:-false}"

@@ -15,15 +15,18 @@ defaults
     option  forwardfor
     option  http-server-close
 
+__WEB_AUTH_USERLIST__
+
 __RATE_LIMIT_TABLE__
 
-# Frontend - receives all incoming requests
+# Frontend - receives all incoming requests (MCP endpoint)
 frontend mcp_frontend
     bind *:__SERVER_PORT__ __BIND_PARAMS__
     __QUIC_BIND_LINE__
 
     # Define ACL for health check endpoint
     acl is_health_check path /healthz
+    acl is_localhost src 127.0.0.1 ::1
 
     # Define ACL that's always false (for CORS disabled scenario)
     acl always_false always_false
@@ -60,7 +63,13 @@ frontend mcp_frontend
     # Route to backend
     default_backend mcp_backend
 
+# Frontend - Web UI (visualization)
+__WEB_UI_FRONTEND__
+
 # Backend - forwards to the actual MCP server
 backend mcp_backend
     balance roundrobin
     server __SERVER_NAME__ 127.0.0.1:__INTERNAL_PORT__ check
+
+# Backend - Narsil HTTP server (web UI + API)
+__WEB_UI_BACKEND__
