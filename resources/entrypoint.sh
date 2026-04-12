@@ -892,6 +892,14 @@ main() {
 
     /usr/local/bin/banner.sh
 
+    # Check for NVIDIA GPU availability
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        echo "NVIDIA GPU detected:"
+        nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "  (nvidia-smi available but query failed)"
+    else
+        echo "No NVIDIA GPU detected (running on CPU)"
+    fi
+
     # Ensure data directory exists and has correct ownership
     mkdir -p "$DATA_DIR"
     chown "${PUID}:${PGID}" "$DATA_DIR" 2>/dev/null || true
