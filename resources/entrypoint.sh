@@ -910,6 +910,13 @@ main() {
         fi
     done
 
+    # Ensure cache directory exists for HuggingFace transformers, ONNX, etc.
+    # Without this, libraries try to write cache into /usr/local/lib/node_modules/
+    # which is read-only for the node user, causing EACCES errors.
+    mkdir -p /home/node/.cache
+    chown "${PUID}:${PGID}" /home/node/.cache 2>/dev/null || true
+    export XDG_CACHE_HOME="/home/node/.cache"
+
     # Mark all mounted repos as safe for git (ownership may differ from container user)
     git config --global --add safe.directory '*'
     if [ "$(id -u)" -eq 0 ]; then

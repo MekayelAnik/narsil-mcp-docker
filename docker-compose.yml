@@ -45,4 +45,11 @@ services:
       # Example: mount individual repos
       # - /home/user/my-rust-project:/data/my-rust-project:ro
       # - /home/user/another-repo:/data/another-repo:ro
+      # Persistent cache for HuggingFace models, ONNX runtime, etc.
+      # Prevents re-downloading embedding models on every container restart
+      - narsil-cache:/home/node/.cache
     restart: unless-stopped
+
+volumes:
+  narsil-cache:
+    driver: local

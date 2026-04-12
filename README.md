@@ -82,6 +82,7 @@ services:
       # - "3000:3000"
     volumes:
       - /path/to/your/repos:/data:ro
+      - narsil-cache:/home/node/.cache         # Persist embedding model cache
     environment:
       - PORT=8010
       - INTERNAL_PORT=38011
@@ -107,16 +108,22 @@ services:
       # - API_KEY=replace-with-strong-secret
       # Optional: CORS origins
       # - CORS=*
+
+volumes:
+  narsil-cache:
+    driver: local
 ```
 
 ### Docker Run
 
 ```bash
+docker volume create narsil-cache
 docker run -d \
   --name=narsil-mcp \
   --restart=unless-stopped \
   -p 8010:8010 \
   -v /path/to/your/repos:/data:ro \
+  -v narsil-cache:/home/node/.cache \
   -e PORT=8010 \
   -e PROTOCOL=SHTTP \
   -e NARSIL_GIT=true \
@@ -125,12 +132,14 @@ docker run -d \
   mekayelanik/narsil-mcp:latest
 
 # With HTTP visualization frontend enabled:
+docker volume create narsil-cache
 docker run -d \
   --name=narsil-mcp \
   --restart=unless-stopped \
   -p 8010:8010 \
   -p 3000:3000 \
   -v /path/to/your/repos:/data:ro \
+  -v narsil-cache:/home/node/.cache \
   -e PORT=8010 \
   -e PROTOCOL=SHTTP \
   -e NARSIL_GIT=true \
@@ -206,9 +215,9 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | `NARSIL_NO_CACHE` | `false` | `true`, `false` | Disable analysis caching |
 | `NARSIL_CACHE_TTL` | `1800` | Integer (seconds) | Cache TTL in seconds |
 | `NARSIL_GRAPH_PATH` | `<index_path>/graph` | Any path | Custom knowledge graph storage path |
-| `NARSIL_NEURAL_BACKEND` | *(empty)* | `api`, `onnx` | Neural embedding backend |
-| `NARSIL_NEURAL_MODEL` | *(empty)* | `voyage-code-2`, `text-embedding-3-large`, etc. | Neural model to use |
-| `NARSIL_NEURAL_DIMENSION` | *(empty)* | Integer (e.g. `3072`) | Override embedding dimensions |
+| `NARSIL_NEURAL_BACKEND` | `api` | `api`, `onnx` | Neural embedding backend |
+| `NARSIL_NEURAL_MODEL` | `voyage-code-2` | `voyage-code-2`, `text-embedding-3-large`, etc. | Embedding model name |
+| `NARSIL_NEURAL_DIMENSION` | *(auto)* | Integer (e.g. `3072`) | Override embedding dimensions |
 | `NARSIL_PRESET` | *(empty)* | `minimal`, `balanced`, `full`, `security-focused` | Tool preset profile |
 | `NARSIL_ENABLED_CATEGORIES` | *(empty)* | Comma-separated | Enable specific tool categories |
 | `NARSIL_DISABLED_TOOLS` | *(empty)* | Comma-separated | Disable specific tools |
@@ -221,6 +230,38 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | `VOYAGE_API_KEY` | *(empty)* | Voyage AI specific API key |
 | `OPENAI_API_KEY` | *(empty)* | OpenAI specific API key |
 | `EMBEDDING_SERVER_ENDPOINT` | *(empty)* | Custom embedding API endpoint URL |
+
+#### Neural Embedding Notes
+
+Neural embeddings are **optional**. Without `NARSIL_NEURAL=true`, all 80+ core tools work (symbol search, call graphs, security scanning, SBOM, git analysis, type inference, data flow, SPARQL, etc.). Only `neural_search` and `find_semantic_clones` require embeddings.
+
+- **API backend** (default): Set `NARSIL_NEURAL=true` + `NARSIL_NEURAL_BACKEND=api` + an API key. Default model is `voyage-code-2` (1024 dims).
+- **ONNX backend** (local, no API key): Set `NARSIL_NEURAL_BACKEND=onnx`. Requires manually downloading the model via `optimum-cli export onnx`. Does not auto-download.
+- **Cache persistence**: The `narsil-cache` volume at `/home/node/.cache` persists model files and ONNX caches across restarts.
+
+**API backend examples:**
+
+```yaml
+# Voyage AI
+- NARSIL_NEURAL=true
+- NARSIL_NEURAL_BACKEND=api
+- NARSIL_NEURAL_MODEL=voyage-code-2
+- VOYAGE_API_KEY=your-voyage-key
+
+# OpenAI
+- NARSIL_NEURAL=true
+- NARSIL_NEURAL_BACKEND=api
+- NARSIL_NEURAL_MODEL=text-embedding-3-small
+- OPENAI_API_KEY=sk-your-key
+
+# Custom OpenAI-compatible endpoint (e.g., self-hosted embedding server)
+- NARSIL_NEURAL=true
+- NARSIL_NEURAL_BACKEND=api
+- NARSIL_NEURAL_MODEL=Snowflake/snowflake-arctic-embed-xs
+- EMBEDDING_SERVER_ENDPOINT=http://your-embedder-host:port/v1
+- EMBEDDING_API_KEY=your-key-or-unused
+- NARSIL_NEURAL_DIMENSION=384
+```
 
 #### Narsil MCP Presets
 
