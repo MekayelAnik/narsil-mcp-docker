@@ -2,10 +2,10 @@
 set -euxo pipefail
 # Set variables first
 REPO_NAME='narsil-mcp'
-BASE_IMAGE=$(cat ./build_data/base-image 2>/dev/null || echo "node:current-alpine")
-HAPROXY_IMAGE=$(cat ./build_data/haproxy-image 2>/dev/null || echo "haproxy:lts-alpine")
+BASE_IMAGE=$(cat ./build_data/base-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/node:current-trixie-slim")
+HAPROXY_IMAGE=$(cat ./build_data/haproxy-image 2>/dev/null || echo "haproxy:lts")
 NARSIL_VERSION=$(cat ./build_data/version 2>/dev/null || exit 1)
-NARSIL_MCP_PKG="narsil-mcp@${NARSIL_VERSION}"
+NARSIL_REPO='postrv/narsil-mcp'
 SUPERGATEWAY_PKG='supergateway@latest'
 DOCKERFILE_NAME="Dockerfile.$REPO_NAME"
 
@@ -30,6 +30,30 @@ else
         echo "ARG NARSIL_VERSION=$NARSIL_VERSION"
         cat << EOF
 FROM $HAPROXY_IMAGE AS haproxy-src
+FROM $BASE_IMAGE AS node-src
+
+# ── Rust build stage: compile narsil-mcp with embedded frontend ──
+FROM ghcr.io/mekayelanik/base-images/rust:slim-trixie AS rust-builder
+RUN apt-get update && \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+    git ca-certificates pkg-config libssl-dev build-essential && \\
+    rm -rf /var/lib/apt/lists/*
+# Copy Node.js from base image (need modern Node for Vite frontend build)
+COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-src /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \\
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+WORKDIR /build
+RUN git clone --depth 1 --branch v${NARSIL_VERSION} https://github.com/${NARSIL_REPO}.git .
+# Build frontend assets (embedded into binary via rust-embed)
+RUN cd frontend && npm install --no-audit --no-fund && npm run build
+# Compile release binary with frontend feature
+RUN --mount=type=cache,target=/usr/local/cargo/registry \\
+    --mount=type=cache,target=/build/target \\
+    cargo build --release --features frontend && \\
+    cp target/release/narsil-mcp /usr/local/bin/narsil-mcp
+
+# ── Final runtime stage ──
 FROM $BASE_IMAGE AS build
 
 # Author info:
@@ -46,37 +70,27 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/banner.sh \\
     && mv -vf /usr/local/bin/haproxy.cfg.template /etc/haproxy/haproxy.cfg.template \\
     && ls -la /etc/haproxy/haproxy.cfg.template
 
-# Install required APK packages
-RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" > /etc/apk/repositories && \\
-    echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories && \\
-    apk --update-cache --no-cache add bash shadow su-exec tzdata haproxy netcat-openbsd openssl git && \\
-    rm -rf /var/cache/apk/*
+# Install runtime packages
+RUN apt-get update && \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget procps && \\
+    rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale /usr/share/lintian
 
 # HAProxy with native QUIC/H3 support from official image
 COPY --from=haproxy-src /usr/local/sbin/haproxy /usr/sbin/haproxy
 RUN mkdir -p /usr/local/sbin && ln -sf /usr/sbin/haproxy /usr/local/sbin/haproxy
 
-# Install Narsil MCP Server
-RUN --mount=type=cache,target=/root/.npm \\
-    echo "Checking if package exists: ${NARSIL_MCP_PKG}" && \\
-    if npm view ${NARSIL_MCP_PKG} >/dev/null 2>&1; then \\
-        echo "Package found, installing..." && \\
-        npm install -g ${NARSIL_MCP_PKG} --omit=dev --no-audit --no-fund --loglevel error && \\
-        echo "Package installed successfully"; \\
-    else \\
-        echo "ERROR: Package ${NARSIL_MCP_PKG} not found in registry!" >&2; \\
-        echo "Available versions:" && \\
-        npm view narsil-mcp versions --json | tr -d '\[\],' | tr '"' '\n' | grep -v '^\$' | tail -10; \\
-        exit 1; \\
-    fi
+# Copy narsil-mcp binary from Rust builder (includes embedded frontend)
+COPY --from=rust-builder /usr/local/bin/narsil-mcp /usr/local/bin/narsil-mcp
+RUN chmod +x /usr/local/bin/narsil-mcp
 
 # Install Supergateway
 RUN --mount=type=cache,target=/root/.npm \\
     echo "Installing Supergateway..." && \\
     npm install -g ${SUPERGATEWAY_PKG} --omit=dev --no-audit --no-fund --loglevel error && \\
-    \\
     rm -rf /tmp/* /var/tmp/* && \\
-    rm -rf /usr/local/lib/node_modules/npm/man /usr/local/lib/node_modules/npm/docs /usr/local/lib/node_modules/npm/html
+    rm -rf /usr/local/lib/node_modules/npm/man /usr/local/lib/node_modules/npm/docs /usr/local/lib/node_modules/npm/html && \\
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 # Create default data directory for repository mounting and state directory for lifecycle sentinels
 RUN mkdir -p /data /state && chown 1000:1000 /data /state
@@ -86,6 +100,10 @@ ARG PORT=8010
 
 # Add ARG for API key
 ARG API_KEY=""
+
+# NVIDIA GPU support (used when host passes --gpus or NVIDIA container runtime)
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # Set an ENV variable from the ARG for runtime
 ENV PORT=\${PORT}

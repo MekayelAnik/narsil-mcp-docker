@@ -25,7 +25,7 @@ on:
         description: HAProxy image for QUIC/H3 support (GHCR mirror with Docker Hub fallback)
         required: false
         type: string
-        default: 'haproxy:lts-alpine'
+        default: 'haproxy:lts'
       ghcr_repo:
         description: GHCR repository
         required: true
