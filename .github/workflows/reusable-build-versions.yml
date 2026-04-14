@@ -98,7 +98,11 @@ jobs:
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
       versions: ${{ steps.generate.outputs.versions }}
+      has_builds: ${{ steps.generate.outputs.has_builds }}
     steps:
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.5
+
       - name: Generate version × platform matrix
         id: generate
         shell: bash
@@ -106,8 +110,35 @@ jobs:
           set -euo pipefail
 
           VERSIONS_JSON='${{ inputs.versions_json }}'
+          FORCE_BUILD="${{ inputs.force_build }}"
+          GHCR_REPO="${{ inputs.ghcr_repo }}"
           RUNNER_BASE="${{ inputs.runner_version || 'ubuntu-24.04' }}"
           REQUESTED_PLATFORMS="${{ inputs.default_platforms }}"
+
+          # Pre-filter: skip versions already in GHCR (unless force_build)
+          # Parallel crane digest checks (~1-2s for 40+ versions vs ~9s serial)
+          if [[ "$FORCE_BUILD" != "true" ]]; then
+            FILTERED="[]"
+            TOTAL=$(echo "$VERSIONS_JSON" | jq length)
+            EXISTING_FILE=$(mktemp)
+
+            # Check all versions in parallel (up to 10 concurrent)
+            echo "$VERSIONS_JSON" | jq -r '.[].version' | \
+              xargs -P10 -I{} sh -c \
+                'DOCKER_CONFIG=/dev/null crane digest "'"${GHCR_REPO}"':{}" >/dev/null 2>&1 && echo "{}"' \
+              > "$EXISTING_FILE" || true
+
+            # Filter out versions that exist
+            if [[ -s "$EXISTING_FILE" ]]; then
+              SKIP_PATTERN=$(paste -sd'|' "$EXISTING_FILE")
+              while IFS= read -r v; do echo "Skipping ${v} — already in GHCR"; done < "$EXISTING_FILE"
+              VERSIONS_JSON=$(echo "$VERSIONS_JSON" | jq -c --arg pat "$SKIP_PATTERN" '[.[] | select(.version | test("^(" + $pat + ")$") | not)]')
+            fi
+            rm -f "$EXISTING_FILE"
+
+            REMAINING=$(echo "$VERSIONS_JSON" | jq length)
+            echo "Pre-filter: ${REMAINING}/${TOTAL} versions need building"
+          fi
 
           # Platform → runner affinity lookup table
           # Format: platform|runner_suffix|slug
@@ -175,10 +206,19 @@ jobs:
           COUNT=$(echo "$MATRIX" | jq length)
           echo "Generated $COUNT build jobs (versions × platforms)"
 
+          # Signal whether there are any builds to run
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "has_builds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_builds=false" >> "$GITHUB_OUTPUT"
+            echo "No builds needed — all versions already exist in GHCR"
+          fi
+
   # ── Per-platform build (native or QEMU-emulated) ──
   build-platform:
     name: Build ${{ matrix.version }} (${{ matrix.slug }})
     needs: [prepare-matrix]
+    if: needs.prepare-matrix.outputs.has_builds == 'true'
     runs-on: ${{ matrix.runner }}
     concurrency:
       group: build-${{ matrix.version }}-${{ matrix.slug }}
@@ -317,7 +357,7 @@ jobs:
   merge-manifest:
     name: Merge ${{ matrix.version }}
     needs: [prepare-matrix, build-platform]
-    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' }}
+    if: ${{ !cancelled() && needs.prepare-matrix.result == 'success' && needs.prepare-matrix.outputs.has_builds == 'true' }}
     runs-on: ${{ inputs.runner_version || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -337,11 +377,13 @@ jobs:
         id: check-digests
         shell: bash
         run: |
-          if [[ ! -d /tmp/digests ]] || [[ -z "$(ls -A /tmp/digests/ 2>/dev/null)" ]]; then
-            echo "No digests found — build was skipped (tags already exist). Skipping merge."
-            echo "has_digests=false" >> "$GITHUB_OUTPUT"
-          else
+          if [[ -d /tmp/digests ]] && ls /tmp/digests/* >/dev/null 2>&1; then
             echo "has_digests=true" >> "$GITHUB_OUTPUT"
+            echo "Found digests to merge:"
+            ls -la /tmp/digests/
+          else
+            echo "has_digests=false" >> "$GITHUB_OUTPUT"
+            echo "No digests found — all builds were skipped (tags already exist)"
           fi
 
       - name: Sanitize inputs
@@ -377,6 +419,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source "$GITHUB_WORKSPACE/.github/scripts/lib-retry.sh"
 
           GHCR_REPO="${{ steps.sanitize.outputs.ghcr_repo }}"
           DH_REPO="${{ steps.sanitize.outputs.dockerhub_repo }}"
@@ -384,6 +427,7 @@ jobs:
           IMAGE_TAG="${{ matrix.image_tag }}"
 
           echo "Merging platform digests for $VERSION"
+
           ls -la /tmp/digests/
 
           # Collect all digest sources
@@ -397,7 +441,7 @@ jobs:
           done
 
           if [[ -z "$SOURCES" ]]; then
-            echo "No digests found — skipping manifest merge"
+            echo "No valid digests found — skipping manifest merge"
             exit 0
           fi
 
@@ -406,12 +450,13 @@ jobs:
           echo "  DH:   $DH_REPO:$VERSION, $DH_REPO:$IMAGE_TAG"
 
           # Create manifest list with all tags (GHCR + Docker Hub)
-          docker buildx imagetools create \
-            -t "${GHCR_REPO}:${VERSION}" \
-            -t "${GHCR_REPO}:${IMAGE_TAG}" \
-            -t "${DH_REPO}:${VERSION}" \
-            -t "${DH_REPO}:${IMAGE_TAG}" \
-            $SOURCES
+          run_with_retry "manifest merge ${VERSION}" \
+            docker buildx imagetools create \
+              -t "${GHCR_REPO}:${VERSION}" \
+              -t "${GHCR_REPO}:${IMAGE_TAG}" \
+              -t "${DH_REPO}:${VERSION}" \
+              -t "${DH_REPO}:${IMAGE_TAG}" \
+              $SOURCES
 
           echo "Multi-arch manifest created successfully"
 
