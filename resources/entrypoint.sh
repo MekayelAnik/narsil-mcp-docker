@@ -662,8 +662,58 @@ build_narsil_args() {
     # Build the narsil-mcp command arguments from environment variables
     local args=""
 
-    # Repository paths: DATA_DIR is always added as --repos
-    args="--repos ${DATA_DIR}"
+    # ---- Repository discovery -----------------------------------------------
+    # NARSIL_REPOS_MODE controls how DATA_DIR is interpreted:
+    #   single  — treat DATA_DIR itself as ONE repo (legacy; good when DATA_DIR
+    #             IS the repo root, e.g. DATA_DIR=/data/myrepo)
+    #   subdirs — enumerate IMMEDIATE subdirectories of DATA_DIR and pass each
+    #             as its own --repos flag (DATA_DIR is a parent holding many
+    #             repos). Skips dotfiles and anything under .narsil/.git/etc.
+    #   auto    — (default) pick 'single' if DATA_DIR/.git exists, else 'subdirs'.
+    local repos_mode="${NARSIL_REPOS_MODE:-auto}"
+    if [[ "$repos_mode" == "auto" ]]; then
+        if [[ -d "${DATA_DIR}/.git" ]]; then
+            repos_mode="single"
+        else
+            repos_mode="subdirs"
+        fi
+    fi
+
+    case "$repos_mode" in
+        single)
+            args="--repos ${DATA_DIR}"
+            echo "Repos mode: single — indexing ${DATA_DIR} as one repo"
+            ;;
+        subdirs)
+            local found=0
+            args=""
+            # Use nullglob-safe loop; ignore hidden dirs (.git, .narsil, .cache, etc.)
+            shopt -s nullglob
+            for sub in "${DATA_DIR}"/*/; do
+                # Strip trailing slash; skip if somehow not a directory
+                local path="${sub%/}"
+                local name="${path##*/}"
+                # Skip hidden / internal dirs
+                [[ "$name" == .* ]] && continue
+                [[ "$name" == "node_modules" ]] && continue
+                args="$args --repos ${path}"
+                found=$((found + 1))
+            done
+            shopt -u nullglob
+            if (( found == 0 )); then
+                echo "Repos mode: subdirs — no subdirectories found in ${DATA_DIR}; falling back to --repos ${DATA_DIR}" >&2
+                args="--repos ${DATA_DIR}"
+            else
+                echo "Repos mode: subdirs — discovered ${found} repositories under ${DATA_DIR}"
+            fi
+            # Strip leading space
+            args="${args# }"
+            ;;
+        *)
+            echo "Invalid NARSIL_REPOS_MODE='${repos_mode}'; falling back to 'single'" >&2
+            args="--repos ${DATA_DIR}"
+            ;;
+    esac
 
     # Feature flags (boolean env vars)
     if is_true "${NARSIL_GIT:-false}"; then
@@ -767,22 +817,27 @@ start_mcp_server() {
     narsil_args="$(build_narsil_args)"
     local narsil_mcp_cmd="narsil-mcp ${narsil_args}"
 
+    # --stateful keeps ONE stdio child alive across all HTTP sessions instead of
+    # respawning narsil per request (which causes port conflicts on the viz port
+    # and races tools/list against narsil's deferred index init).
+    local SG_STATEFUL_FLAG="${SUPERGATEWAY_STATEFUL:---stateful}"
+
     case "${PROTOCOL^^}" in
         SHTTP|STREAMABLEHTTP)
-            CMD_ARGS=(npx --yes supergateway --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="SHTTP/streamableHttp"
             ;;
         SSE)
-            CMD_ARGS=(npx --yes supergateway --port "$INTERNAL_PORT" --ssePath /sse --outputTransport sse --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --ssePath /sse --outputTransport sse --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="SSE/Server-Sent Events"
             ;;
         WS|WEBSOCKET)
-            CMD_ARGS=(npx --yes supergateway --port "$INTERNAL_PORT" --messagePath /message --outputTransport ws --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --messagePath /message --outputTransport ws --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="WS/WebSocket"
             ;;
         *)
             echo "Invalid PROTOCOL='${PROTOCOL}', using default ${DEFAULT_PROTOCOL}"
-            CMD_ARGS=(npx --yes supergateway --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="SHTTP/streamableHttp"
             ;;
     esac
@@ -813,6 +868,82 @@ start_mcp_server() {
 
         sleep 1
     done
+
+    # ---- Pre-warm: force narsil spawn + index start immediately -------------
+    # Supergateway's stdio mode in --stateful mode spawns the narsil child on
+    # the FIRST initialize request. We send that initialize here so indexing
+    # starts at container boot, not on first external client connection.
+    # In stateful mode the transport returns a Mcp-Session-Id header that must
+    # be echoed on every subsequent request — capture it for the poll loop.
+    local mcp_path="/mcp"
+    case "${PROTOCOL^^}" in
+        SSE) mcp_path="/sse" ;;
+        WS|WEBSOCKET) mcp_path="/message" ;;
+    esac
+
+    echo "Pre-warming Narsil (triggering stdio spawn + background index init)..."
+    local prewarm_headers
+    prewarm_headers="$(mktemp)"
+    curl -sS -D "$prewarm_headers" -X POST "http://127.0.0.1:${INTERNAL_PORT}${mcp_path}" \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"entrypoint-prewarm","version":"0"}}}' \
+        >/dev/null 2>&1 || true
+
+    local MCP_SID=""
+    if [[ -f "$prewarm_headers" ]]; then
+        MCP_SID="$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ {print $2}' "$prewarm_headers" | tr -d '\r\n ')"
+        rm -f "$prewarm_headers"
+    fi
+    if [[ -n "$MCP_SID" ]]; then
+        echo "Pre-warm session id: ${MCP_SID:0:8}... (will be reused for index-ready polling)"
+    else
+        echo "No Mcp-Session-Id returned; supergateway is stateless or session header not exposed."
+    fi
+
+    # ---- Index-ready gate ---------------------------------------------------
+    # Optionally block until list_repos returns at least one indexed repo so
+    # HAProxy (started right after this function returns) never exposes a
+    # half-initialized MCP. Disable for empty-repo dev setups.
+    if [[ "${WAIT_FOR_INDEX:-true}" == "true" ]]; then
+        local INDEX_TIMEOUT="${INDEX_READY_TIMEOUT:-300}"  # seconds
+        local sid_header=()
+        [[ -n "$MCP_SID" ]] && sid_header=(-H "Mcp-Session-Id: ${MCP_SID}")
+
+        echo "Waiting for Narsil to finish initial repo indexing (timeout ${INDEX_TIMEOUT}s; set WAIT_FOR_INDEX=false to skip)..."
+        local waited=0
+        while (( waited < INDEX_TIMEOUT )); do
+            local body
+            body="$(curl -sS -X POST "http://127.0.0.1:${INTERNAL_PORT}${mcp_path}" \
+                -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                "${sid_header[@]}" \
+                -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_repos","arguments":{}}}' 2>/dev/null || true)"
+
+            # list_repos returns markdown starting with "# Indexed Repositories".
+            # When empty, body contains "*No repositories indexed yet.*".
+            # When populated, body contains per-repo sections ("## <name>").
+            if echo "$body" | grep -q '# Indexed Repositories' \
+               && ! echo "$body" | grep -q 'No repositories indexed yet'; then
+                echo "Narsil indexing complete. Proceeding with HAProxy startup."
+                break
+            fi
+
+            if ! kill -0 "$MCP_PID" >/dev/null 2>&1; then
+                echo "MCP server exited while waiting for indexing" >&2
+                return 1
+            fi
+
+            sleep 2
+            waited=$((waited + 2))
+        done
+
+        if (( waited >= INDEX_TIMEOUT )); then
+            echo "WARNING: index-ready timeout (${INDEX_TIMEOUT}s) reached; starting HAProxy anyway. Some tools may be missing from tools/list until indexing completes." >&2
+        fi
+    else
+        echo "WAIT_FOR_INDEX=false — HAProxy will accept traffic while narsil continues indexing in the background."
+    fi
 }
 
 shutdown() {

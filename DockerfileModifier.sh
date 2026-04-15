@@ -37,7 +37,7 @@ FROM $BASE_IMAGE AS node-src
 FROM $RUST_BASE_IMAGE AS rust-builder
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-    git ca-certificates pkg-config libssl-dev build-essential && \\
+    git ca-certificates pkg-config libssl-dev build-essential cmake && \\
     rm -rf /var/lib/apt/lists/*
 # Copy Node.js from base image (need modern Node for Vite frontend build)
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
@@ -48,10 +48,21 @@ WORKDIR /build
 RUN git clone --depth 1 --branch v${NARSIL_VERSION} https://github.com/${NARSIL_REPO}.git .
 # Build frontend assets (embedded into binary via rust-embed)
 RUN cd frontend && npm install --no-audit --no-fund && npm run build
-# Compile release binary with frontend feature
+# Compile release binary with all non-default compile-time features:
+#   - frontend    : embedded Vite visualization UI (implies 'native': LSP,
+#                   call-graph, remote/octocrab, watch/notify, streaming, axum)
+#   - graph       : SPARQL/RDF knowledge graph + CCG (oxigraph + flate2).
+#                   Without this, NARSIL_GRAPH=true logs "binary was built
+#                   without the 'graph' feature" and SPARQL/CCG tools vanish.
+#   - neural-onnx : local ONNX-based embedding backend (implies 'neural':
+#                   usearch + ndarray vector search). Enables
+#                   NARSIL_NEURAL=true with NARSIL_NEURAL_BACKEND=onnx
+#                   (no VOYAGE_API_KEY required). Pulls ort + tokenizers.
+# 'wasm' is deliberately excluded — it's browser-only and mutually exclusive
+# with the native runtime.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \\
     --mount=type=cache,target=/build/target \\
-    cargo build --release --features frontend && \\
+    cargo build --release --features frontend,graph,neural-onnx && \\
     cp target/release/narsil-mcp /usr/local/bin/narsil-mcp
 
 # ── Final runtime stage ──
@@ -111,8 +122,11 @@ ENV PORT=\${PORT}
 ENV API_KEY=\${API_KEY}
 ENV DATA_DIR=/data
 
-# L7 health check: auto-detects HTTP/HTTPS via ENABLE_HTTPS env var
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \\
+# L7 health check: auto-detects HTTP/HTTPS via ENABLE_HTTPS env var.
+# start-period is generous because the entrypoint now blocks HAProxy startup
+# until narsil finishes initial repo indexing (WAIT_FOR_INDEX=true by default,
+# INDEX_READY_TIMEOUT=300s). Tune via INDEX_READY_TIMEOUT at runtime.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=450s --retries=3 \\
     CMD sh -c 'wget -q --spider --no-check-certificate \$([ "\$ENABLE_HTTPS" = "true" ] && echo https || echo http)://127.0.0.1:\${PORT:-8010}/healthz'
 
 # Set the entrypoint
