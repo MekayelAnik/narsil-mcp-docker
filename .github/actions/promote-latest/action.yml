@@ -284,7 +284,6 @@ runs:
 
     - name: Promote stable if eligible (5-day rule)
       id: promote-stable
-      if: false  # :stable tag publishing disabled
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh_token }}
