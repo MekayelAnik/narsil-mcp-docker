@@ -57,20 +57,20 @@ FROM $RUST_BASE_IMAGE AS rust-builder
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
     git ca-certificates pkg-config libssl-dev build-essential cmake \\
-    clang libclang-dev llvm-dev libclang-cpp-dev && \\
+    clang-19 libclang-19-dev llvm-19-dev && \\
     rm -rf /var/lib/apt/lists/* && \\
-    # bindgen (transitively pulled by ort/usearch/oxigraph) needs libclang at
-    # build time. On Debian/trixie libclang ships as libclang-NN.so.1 which
-    # bindgen's default glob may not match — create a stable symlink and
-    # record the directory for LIBCLANG_PATH.
-    LIBCLANG_SO=\$(find /usr/lib -maxdepth 4 -name 'libclang-*.so*' -o -name 'libclang.so*' 2>/dev/null | head -1) && \\
-    test -n "\$LIBCLANG_SO" && \\
-    ln -sfv "\$LIBCLANG_SO" /usr/lib/libclang.so && \\
-    dirname "\$LIBCLANG_SO" > /etc/libclang_path
-# Export as ENV so bindgen picks it up; read from the file written above.
-# Using /usr/lib as the stable symlink dir is portable across llvm versions.
-ENV LIBCLANG_PATH=/usr/lib
-ENV LD_LIBRARY_PATH=/usr/lib:\${LD_LIBRARY_PATH:-}
+    # bindgen (pulled transitively by ort/usearch/oxigraph) needs the C
+    # libclang shared object, NOT libclang-cpp. On previous iterations the
+    # glob matched libclang-cpp-NN.so.1 (C++ API) which loads but then panics
+    # with 'unsupported version' when bindgen calls clang_createIndex.
+    # Pinning to libclang-19-dev gives us a predictable path we can use
+    # directly, and is new enough for any clang-sys 1.8.x requirement.
+    ls /usr/lib/llvm-19/lib/libclang.so* /usr/lib/llvm-19/lib/libclang-*.so* 2>/dev/null && \\
+    ln -sfv /usr/lib/llvm-19/lib/libclang.so.1 /usr/lib/libclang.so
+# Point bindgen at the llvm-19 lib directory; use that path rather than the
+# generic /usr/lib so we never accidentally pick up libclang-cpp.
+ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib
+ENV LD_LIBRARY_PATH=/usr/lib/llvm-19/lib
 # Copy Node.js from base image (need modern Node for Vite frontend build)
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-src /usr/local/lib/node_modules /usr/local/lib/node_modules
