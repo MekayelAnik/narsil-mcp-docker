@@ -56,8 +56,12 @@ FROM $BASE_IMAGE AS node-src
 FROM $RUST_BASE_IMAGE AS rust-builder
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-    git ca-certificates pkg-config libssl-dev build-essential cmake && \\
+    git ca-certificates pkg-config libssl-dev build-essential cmake \\
+    clang libclang-dev llvm-dev && \\
     rm -rf /var/lib/apt/lists/*
+# bindgen (transitively pulled by ort/usearch/oxigraph) needs libclang at
+# build time. Without it: thread 'main' panicked ... "Unable to find libclang"
+ENV LIBCLANG_PATH=/usr/lib/llvm/lib
 # Copy Node.js from base image (need modern Node for Vite frontend build)
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-src /usr/local/lib/node_modules /usr/local/lib/node_modules
