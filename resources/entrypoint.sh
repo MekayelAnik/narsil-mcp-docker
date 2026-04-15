@@ -774,27 +774,36 @@ start_mcp_server() {
     narsil_args="$(build_narsil_args)"
     local narsil_mcp_cmd="narsil-mcp ${narsil_args}"
 
-    # --stateful keeps ONE stdio child alive across all HTTP sessions instead of
-    # respawning narsil per request (which causes port conflicts on the viz port
-    # and races tools/list against narsil's deferred index init).
+    # --stateful keeps ONE stdio child alive across HTTP sessions instead of
+    # respawning narsil per request. --sessionTimeout is critical: without
+    # it supergateway tears the session (and child) down as soon as each
+    # request's response is flushed, which defeats --stateful entirely — the
+    # pre-warmed narsil would be gone before the index-ready poll can see it.
+    # Default timeout is 10 minutes (600_000 ms), plenty of headroom for even
+    # large-repo initial indexing.
     local SG_STATEFUL_FLAG="${SUPERGATEWAY_STATEFUL:---stateful}"
+    local SG_SESSION_TIMEOUT="${SUPERGATEWAY_SESSION_TIMEOUT:-600000}"
+    local -a SG_SESSION_ARGS=()
+    if [[ "$SG_STATEFUL_FLAG" == "--stateful" ]]; then
+        SG_SESSION_ARGS=(--sessionTimeout "$SG_SESSION_TIMEOUT")
+    fi
 
     case "${PROTOCOL^^}" in
         SHTTP|STREAMABLEHTTP)
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="SHTTP/streamableHttp"
             ;;
         SSE)
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --ssePath /sse --outputTransport sse --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --ssePath /sse --outputTransport sse --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="SSE/Server-Sent Events"
             ;;
         WS|WEBSOCKET)
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --messagePath /message --outputTransport ws --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --messagePath /message --outputTransport ws --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="WS/WebSocket"
             ;;
         *)
             echo "Invalid PROTOCOL='${PROTOCOL}', using default ${DEFAULT_PROTOCOL}"
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
+            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
             PROTOCOL_DISPLAY="SHTTP/streamableHttp"
             ;;
     esac
