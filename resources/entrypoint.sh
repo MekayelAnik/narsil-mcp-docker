@@ -22,6 +22,7 @@ readonly REINDEX_DONE_FILE="${STATE_DIR}/.reindex_done"
 readonly HAPROXY_SERVER_NAME="narsil-mcp"
 readonly HAPROXY_TEMPLATE="/etc/haproxy/haproxy.cfg.template"
 readonly HAPROXY_CONFIG="/tmp/haproxy.cfg"
+readonly MCP_SID_FILE="/tmp/narsil-mcp.sid"
 
 trim() {
     local var="$*"
@@ -688,7 +689,7 @@ build_narsil_args() {
     case "$repos_mode" in
         single)
             args+=(--repos "$DATA_DIR")
-            echo "Repos mode: single — indexing ${DATA_DIR} as one repo"
+            echo "Repos mode: single — indexing ${DATA_DIR} as one repo" >&2
             ;;
         subdirs)
             local found=0
@@ -709,7 +710,7 @@ build_narsil_args() {
                 echo "Repos mode: subdirs — no subdirectories found in ${DATA_DIR}; falling back to --repos ${DATA_DIR}" >&2
                 args=(--repos "$DATA_DIR")
             else
-                echo "Repos mode: subdirs — discovered ${found} repositories under ${DATA_DIR}"
+                echo "Repos mode: subdirs — discovered ${found} repositories under ${DATA_DIR}" >&2
             fi
             ;;
         *)
@@ -850,21 +851,29 @@ start_mcp_server() {
     echo "Pre-warming Narsil (triggering stdio spawn + background index init)..."
     local prewarm_headers
     prewarm_headers="$(mktemp)"
-    curl -sS -D "$prewarm_headers" -X POST "http://127.0.0.1:${INTERNAL_PORT}${mcp_path}" \
-        -H 'Content-Type: application/json' \
-        -H 'Accept: application/json, text/event-stream' \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"entrypoint-prewarm","version":"0"}}}' \
-        >/dev/null 2>&1 || true
-
     local MCP_SID=""
-    if [[ -f "$prewarm_headers" ]]; then
+    local attempt
+    # Retry pre-warm up to 10x (2s each) — supergateway may bind port before
+    # the streamableHttp route is fully wired, racing the first POST.
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        : > "$prewarm_headers"
+        curl -sS -D "$prewarm_headers" -X POST "http://127.0.0.1:${INTERNAL_PORT}${mcp_path}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"entrypoint-prewarm","version":"0"}}}' \
+            >/dev/null 2>&1 || true
         MCP_SID="$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ {print $2}' "$prewarm_headers" | tr -d '\r\n ')"
-        rm -f "$prewarm_headers"
-    fi
+        [[ -n "$MCP_SID" ]] && break
+        sleep 2
+    done
+    rm -f "$prewarm_headers"
+
     if [[ -n "$MCP_SID" ]]; then
-        echo "Pre-warm session id: ${MCP_SID:0:8}... (will be reused for index-ready polling)"
+        echo "Pre-warm session id: ${MCP_SID:0:8}... (will be reused for index-ready polling and keepalive)"
+        printf '%s' "$MCP_SID" > "$MCP_SID_FILE"
     else
-        echo "No Mcp-Session-Id returned; supergateway is stateless or session header not exposed."
+        echo "No Mcp-Session-Id returned after retries; keepalive will re-initialize on first tick."
+        : > "$MCP_SID_FILE"
     fi
 
     # ---- Index-ready gate ---------------------------------------------------
@@ -912,8 +921,76 @@ start_mcp_server() {
     fi
 }
 
+start_keepalive() {
+    # Keep the supergateway-managed narsil-mcp stdio child alive across idle
+    # periods. Without this, supergateway reaps the child after
+    # SUPERGATEWAY_SESSION_TIMEOUT (default 600s) of inactivity, which closes
+    # the embedded HTTP server on WEB_UI_INTERNAL_PORT and breaks the web UI
+    # (HAProxy returns 503 SC--).
+    #
+    # The loop pings tools/list at KEEPALIVE_INTERVAL (default 240s, well under
+    # the 600s timeout). If the session was reaped between ticks, re-initialize
+    # to obtain a fresh session id and continue.
+    if [[ "${NARSIL_KEEPALIVE:-true}" != "true" ]]; then
+        echo "Keepalive disabled (NARSIL_KEEPALIVE=${NARSIL_KEEPALIVE:-true})"
+        return 0
+    fi
+
+    local interval="${KEEPALIVE_INTERVAL:-240}"
+    local mcp_path="/mcp"
+    case "${PROTOCOL^^}" in
+        SSE) mcp_path="/sse" ;;
+        WS|WEBSOCKET) mcp_path="/message" ;;
+    esac
+    local internal_port="$INTERNAL_PORT"
+
+    (
+        while true; do
+            sleep "$interval"
+            local sid=""
+            [[ -f "$MCP_SID_FILE" ]] && sid="$(cat "$MCP_SID_FILE" 2>/dev/null || true)"
+
+            # If we have no session id, try to obtain one.
+            if [[ -z "$sid" ]]; then
+                local hdr
+                hdr="$(mktemp)"
+                curl -sS -D "$hdr" -X POST "http://127.0.0.1:${internal_port}${mcp_path}" \
+                    -H 'Content-Type: application/json' \
+                    -H 'Accept: application/json, text/event-stream' \
+                    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"keepalive","version":"0"}}}' \
+                    >/dev/null 2>&1 || true
+                sid="$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ {print $2}' "$hdr" | tr -d '\r\n ')"
+                rm -f "$hdr"
+                if [[ -n "$sid" ]]; then
+                    printf '%s' "$sid" > "$MCP_SID_FILE"
+                else
+                    continue
+                fi
+            fi
+
+            # Ping with tools/list. Cheap call, keeps stdio child active.
+            local code
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${internal_port}${mcp_path}" \
+                -H 'Content-Type: application/json' \
+                -H 'Accept: application/json, text/event-stream' \
+                -H "Mcp-Session-Id: ${sid}" \
+                -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || echo 000)"
+
+            # 4xx => session expired or unknown. Drop sid; next tick re-initializes.
+            if [[ "$code" =~ ^4 ]]; then
+                : > "$MCP_SID_FILE"
+            fi
+        done
+    ) &
+    KEEPALIVE_PID=$!
+    echo "Keepalive started (PID=${KEEPALIVE_PID}, interval=${interval}s)"
+}
+
 shutdown() {
     set +e
+    if [[ -n "${KEEPALIVE_PID:-}" ]]; then
+        kill "$KEEPALIVE_PID" 2>/dev/null || true
+    fi
     if [[ -n "${HAPROXY_PID:-}" ]]; then
         kill "$HAPROXY_PID" 2>/dev/null || true
     fi
@@ -1062,6 +1139,7 @@ main() {
 
     start_mcp_server
     start_haproxy
+    start_keepalive
 
     if [[ -n "$API_KEY" ]]; then
         echo "API key authentication enabled"

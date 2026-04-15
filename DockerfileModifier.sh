@@ -117,7 +117,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/banner.sh \\
 # Install runtime packages
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget procps && \\
+    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget curl procps && \\
     rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale /usr/share/lintian
 
 # HAProxy with native QUIC/H3 support from official image
