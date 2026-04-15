@@ -10,6 +10,25 @@ NARSIL_REPO='postrv/narsil-mcp'
 SUPERGATEWAY_PKG='supergateway@latest'
 DOCKERFILE_NAME="Dockerfile.$REPO_NAME"
 
+# ── Determine Cargo feature set based on narsil-mcp version ──
+# Upstream feature availability:
+#   - frontend:    v1.0.0+   (embedded Vite UI)
+#   - neural:      v1.0.0+   (usearch + ndarray)
+#   - neural-onnx: v1.0.0+   (neural + ort + tokenizers)
+#   - graph:       v1.3.0+   (oxigraph SPARQL/RDF + CCG)
+# Earlier versions will fail with:
+#   "error: the package 'narsil-mcp' does not contain this feature: graph"
+# so we gate `graph` on >=1.3.0.
+case "$NARSIL_VERSION" in
+    1.0.*|1.1.*|1.2.*)
+        NARSIL_FEATURES="frontend,neural-onnx"
+        ;;
+    *)
+        NARSIL_FEATURES="frontend,graph,neural-onnx"
+        ;;
+esac
+echo "Selected Cargo features for narsil-mcp v${NARSIL_VERSION}: ${NARSIL_FEATURES}"
+
 # Create a temporary file safely
 TEMP_FILE=$(mktemp "${DOCKERFILE_NAME}.XXXXXX") || {
     echo "Error creating temporary file" >&2
@@ -62,7 +81,7 @@ RUN cd frontend && npm install --no-audit --no-fund && npm run build
 # with the native runtime.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \\
     --mount=type=cache,target=/build/target \\
-    cargo build --release --features frontend,graph,neural-onnx && \\
+    cargo build --release --features ${NARSIL_FEATURES} && \\
     cp target/release/narsil-mcp /usr/local/bin/narsil-mcp
 
 # ── Final runtime stage ──
