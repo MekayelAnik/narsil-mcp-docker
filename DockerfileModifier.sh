@@ -57,11 +57,20 @@ FROM $RUST_BASE_IMAGE AS rust-builder
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
     git ca-certificates pkg-config libssl-dev build-essential cmake \\
-    clang libclang-dev llvm-dev && \\
-    rm -rf /var/lib/apt/lists/*
-# bindgen (transitively pulled by ort/usearch/oxigraph) needs libclang at
-# build time. Without it: thread 'main' panicked ... "Unable to find libclang"
-ENV LIBCLANG_PATH=/usr/lib/llvm/lib
+    clang libclang-dev llvm-dev libclang-cpp-dev && \\
+    rm -rf /var/lib/apt/lists/* && \\
+    # bindgen (transitively pulled by ort/usearch/oxigraph) needs libclang at
+    # build time. On Debian/trixie libclang ships as libclang-NN.so.1 which
+    # bindgen's default glob may not match — create a stable symlink and
+    # record the directory for LIBCLANG_PATH.
+    LIBCLANG_SO=\$(find /usr/lib -maxdepth 4 -name 'libclang-*.so*' -o -name 'libclang.so*' 2>/dev/null | head -1) && \\
+    test -n "\$LIBCLANG_SO" && \\
+    ln -sfv "\$LIBCLANG_SO" /usr/lib/libclang.so && \\
+    dirname "\$LIBCLANG_SO" > /etc/libclang_path
+# Export as ENV so bindgen picks it up; read from the file written above.
+# Using /usr/lib as the stable symlink dir is portable across llvm versions.
+ENV LIBCLANG_PATH=/usr/lib
+ENV LD_LIBRARY_PATH=/usr/lib:\${LD_LIBRARY_PATH:-}
 # Copy Node.js from base image (need modern Node for Vite frontend build)
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-src /usr/local/lib/node_modules /usr/local/lib/node_modules
