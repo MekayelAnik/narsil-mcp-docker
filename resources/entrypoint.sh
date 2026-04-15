@@ -913,8 +913,17 @@ main() {
     # Ensure cache directory exists for HuggingFace transformers, ONNX, etc.
     # Without this, libraries try to write cache into /usr/local/lib/node_modules/
     # which is read-only for the node user, causing EACCES errors.
+    #
+    # Recursive chown self-heals named volumes reused across PUID changes or
+    # populated by a prior run as root — a non-recursive chown on the parent
+    # would leave stale subdirs (e.g. narsil-mcp/ or narsil-mcp/graph/) owned
+    # by root, and narsil would EACCES on the index/graph path at startup.
     mkdir -p /home/node/.cache
-    chown "${PUID}:${PGID}" /home/node/.cache 2>/dev/null || true
+    # Pre-create index/graph paths if user configured them under .cache so
+    # narsil doesn't have to create them itself after we chown.
+    [[ -n "${NARSIL_INDEX_PATH:-}" ]] && mkdir -p "${NARSIL_INDEX_PATH}" 2>/dev/null || true
+    [[ -n "${NARSIL_GRAPH_PATH:-}" ]] && mkdir -p "${NARSIL_GRAPH_PATH}" 2>/dev/null || true
+    chown -R "${PUID}:${PGID}" /home/node/.cache 2>/dev/null || true
     export XDG_CACHE_HOME="/home/node/.cache"
 
     # Mark all mounted repos as safe for git (ownership may differ from container user)
