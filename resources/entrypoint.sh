@@ -659,8 +659,14 @@ start_haproxy() {
 }
 
 build_narsil_args() {
-    # Build the narsil-mcp command arguments from environment variables
-    local args=""
+    # Build the narsil-mcp command arguments from environment variables.
+    # Uses a bash array internally so values with spaces / shell metachars
+    # (e.g. a DATA_DIR subdir like "/data/My Project") survive correctly.
+    # Supergateway receives the final command via --stdio as a single STRING
+    # that it later re-splits with sh rules, so at the end we serialize the
+    # array with printf '%q' — each token becomes shell-escaped and re-splits
+    # back to the original argv on the other side.
+    local -a args=()
 
     # ---- Repository discovery -----------------------------------------------
     # NARSIL_REPOS_MODE controls how DATA_DIR is interpreted:
@@ -681,12 +687,11 @@ build_narsil_args() {
 
     case "$repos_mode" in
         single)
-            args="--repos ${DATA_DIR}"
+            args+=(--repos "$DATA_DIR")
             echo "Repos mode: single — indexing ${DATA_DIR} as one repo"
             ;;
         subdirs)
             local found=0
-            args=""
             # Use nullglob-safe loop; ignore hidden dirs (.git, .narsil, .cache, etc.)
             shopt -s nullglob
             for sub in "${DATA_DIR}"/*/; do
@@ -696,119 +701,71 @@ build_narsil_args() {
                 # Skip hidden / internal dirs
                 [[ "$name" == .* ]] && continue
                 [[ "$name" == "node_modules" ]] && continue
-                args="$args --repos ${path}"
+                args+=(--repos "$path")
                 found=$((found + 1))
             done
             shopt -u nullglob
             if (( found == 0 )); then
                 echo "Repos mode: subdirs — no subdirectories found in ${DATA_DIR}; falling back to --repos ${DATA_DIR}" >&2
-                args="--repos ${DATA_DIR}"
+                args=(--repos "$DATA_DIR")
             else
                 echo "Repos mode: subdirs — discovered ${found} repositories under ${DATA_DIR}"
             fi
-            # Strip leading space
-            args="${args# }"
             ;;
         *)
             echo "Invalid NARSIL_REPOS_MODE='${repos_mode}'; falling back to 'single'" >&2
-            args="--repos ${DATA_DIR}"
+            args=(--repos "$DATA_DIR")
             ;;
     esac
 
     # Feature flags (boolean env vars)
-    if is_true "${NARSIL_GIT:-false}"; then
-        args="$args --git"
-    fi
-
-    if is_true "${NARSIL_CALL_GRAPH:-false}"; then
-        args="$args --call-graph"
-    fi
-
-    if is_true "${NARSIL_PERSIST:-false}"; then
-        args="$args --persist"
-    fi
-
-    if is_true "${NARSIL_WATCH:-false}"; then
-        args="$args --watch"
-    fi
-
-    if is_true "${NARSIL_LSP:-false}"; then
-        args="$args --lsp"
-    fi
-
-    if is_true "${NARSIL_STREAMING:-false}"; then
-        args="$args --streaming"
-    fi
-
-    if is_true "${NARSIL_REMOTE:-false}"; then
-        args="$args --remote"
-    fi
-
-    if is_true "${NARSIL_NEURAL:-false}"; then
-        args="$args --neural"
-    fi
-
-    if is_true "${NARSIL_GRAPH:-false}"; then
-        args="$args --graph"
-    fi
-
-    if is_true "${NARSIL_VERBOSE:-false}"; then
-        args="$args --verbose"
-    fi
+    is_true "${NARSIL_GIT:-false}"        && args+=(--git)
+    is_true "${NARSIL_CALL_GRAPH:-false}" && args+=(--call-graph)
+    is_true "${NARSIL_PERSIST:-false}"    && args+=(--persist)
+    is_true "${NARSIL_WATCH:-false}"      && args+=(--watch)
+    is_true "${NARSIL_LSP:-false}"        && args+=(--lsp)
+    is_true "${NARSIL_STREAMING:-false}"  && args+=(--streaming)
+    is_true "${NARSIL_REMOTE:-false}"     && args+=(--remote)
+    is_true "${NARSIL_NEURAL:-false}"     && args+=(--neural)
+    is_true "${NARSIL_GRAPH:-false}"      && args+=(--graph)
+    is_true "${NARSIL_VERBOSE:-false}"    && args+=(--verbose)
+    is_true "${NARSIL_NO_CACHE:-false}"   && args+=(--no-cache)
 
     if is_true "${NARSIL_REINDEX:-false}"; then
         if [[ -f "$REINDEX_DONE_FILE" ]]; then
             echo "Reindex already completed this container lifecycle, skipping --reindex"
         else
-            args="$args --reindex"
+            args+=(--reindex)
             touch "$REINDEX_DONE_FILE"
         fi
     fi
 
     if is_true "${NARSIL_HTTP:-false}"; then
-        args="$args --http --http-port ${WEB_UI_INTERNAL_PORT}"
+        args+=(--http --http-port "$WEB_UI_INTERNAL_PORT")
     fi
 
-    if is_true "${NARSIL_NO_CACHE:-false}"; then
-        args="$args --no-cache"
-    fi
+    # String-value env vars (only added when non-empty)
+    [[ -n "${NARSIL_INDEX_PATH:-}"       ]] && args+=(--index-path       "$NARSIL_INDEX_PATH")
+    [[ -n "${NARSIL_DISCOVER:-}"         ]] && args+=(--discover         "$NARSIL_DISCOVER")
+    [[ -n "${NARSIL_CACHE_TTL:-}"        ]] && args+=(--cache-ttl        "$NARSIL_CACHE_TTL")
+    [[ -n "${NARSIL_GRAPH_PATH:-}"       ]] && args+=(--graph-path       "$NARSIL_GRAPH_PATH")
+    [[ -n "${NARSIL_NEURAL_BACKEND:-}"   ]] && args+=(--neural-backend   "$NARSIL_NEURAL_BACKEND")
+    [[ -n "${NARSIL_NEURAL_MODEL:-}"     ]] && args+=(--neural-model     "$NARSIL_NEURAL_MODEL")
+    [[ -n "${NARSIL_NEURAL_DIMENSION:-}" ]] && args+=(--neural-dimension "$NARSIL_NEURAL_DIMENSION")
+    [[ -n "${NARSIL_PRESET:-}"           ]] && args+=(--preset           "$NARSIL_PRESET")
 
-    # String-value env vars
-    if [[ -n "${NARSIL_INDEX_PATH:-}" ]]; then
-        args="$args --index-path ${NARSIL_INDEX_PATH}"
-    fi
+    # NARSIL_HTTP_PORT controls the HAProxy-exposed web UI port, not the
+    # internal narsil port — intentionally not forwarded to narsil.
 
-    if [[ -n "${NARSIL_DISCOVER:-}" ]]; then
-        args="$args --discover ${NARSIL_DISCOVER}"
-    fi
-
-    # NARSIL_HTTP_PORT controls the HAProxy-exposed web UI port, not the internal narsil port
-
-    if [[ -n "${NARSIL_CACHE_TTL:-}" ]]; then
-        args="$args --cache-ttl ${NARSIL_CACHE_TTL}"
-    fi
-
-    if [[ -n "${NARSIL_GRAPH_PATH:-}" ]]; then
-        args="$args --graph-path ${NARSIL_GRAPH_PATH}"
-    fi
-
-    if [[ -n "${NARSIL_NEURAL_BACKEND:-}" ]]; then
-        args="$args --neural-backend ${NARSIL_NEURAL_BACKEND}"
-    fi
-
-    if [[ -n "${NARSIL_NEURAL_MODEL:-}" ]]; then
-        args="$args --neural-model ${NARSIL_NEURAL_MODEL}"
-    fi
-
-    if [[ -n "${NARSIL_NEURAL_DIMENSION:-}" ]]; then
-        args="$args --neural-dimension ${NARSIL_NEURAL_DIMENSION}"
-    fi
-
-    if [[ -n "${NARSIL_PRESET:-}" ]]; then
-        args="$args --preset ${NARSIL_PRESET}"
-    fi
-
-    printf '%s' "$args"
+    # Serialize: shell-quote each token and join with spaces so supergateway's
+    # re-split reproduces the exact argv. Without %q a path like "/My Dir/r"
+    # would become two separate args.
+    local a out=""
+    for a in "${args[@]}"; do
+        out+="$(printf '%q' "$a") "
+    done
+    # Trim trailing space and emit.
+    printf '%s' "${out% }"
 }
 
 start_mcp_server() {
