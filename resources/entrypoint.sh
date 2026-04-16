@@ -1054,9 +1054,12 @@ main() {
     export NARSIL_NEURAL="${NARSIL_NEURAL:-false}"
     export NARSIL_GRAPH="${NARSIL_GRAPH:-false}"
 
-    # Export upstream narsil-mcp environment variables (read directly by narsil-mcp, not CLI args)
-    export NARSIL_ENABLED_CATEGORIES="${NARSIL_ENABLED_CATEGORIES:-}"
-    export NARSIL_DISABLED_TOOLS="${NARSIL_DISABLED_TOOLS:-}"
+    # Export upstream narsil-mcp environment variables (read directly by narsil-mcp, not CLI args).
+    # Only export when non-empty: narsil-mcp treats an empty
+    # NARSIL_ENABLED_CATEGORIES as "disable all categories" which hides
+    # every tool except those whose category key mismatches the config.
+    [[ -n "${NARSIL_ENABLED_CATEGORIES:-}" ]] && export NARSIL_ENABLED_CATEGORIES
+    [[ -n "${NARSIL_DISABLED_TOOLS:-}" ]]     && export NARSIL_DISABLED_TOOLS
 
     # Export neural embedding API keys (read directly by narsil-mcp)
     export EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
