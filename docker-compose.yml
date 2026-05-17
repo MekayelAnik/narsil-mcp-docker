@@ -58,7 +58,7 @@ services:
       # - /home/user/another-repo:/data/another-repo:ro
       # Persistent cache for HuggingFace models, ONNX runtime, etc.
       # Prevents re-downloading embedding models on every container restart
-      - narsil-cache:/home/node/.cache
+      - narsil-cache:/home/narsil/.cache
     restart: unless-stopped
 
 volumes:

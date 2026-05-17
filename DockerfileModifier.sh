@@ -2,7 +2,15 @@
 set -euxo pipefail
 # Set variables first
 REPO_NAME='narsil-mcp'
-BASE_IMAGE=$(cat ./build_data/base-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/node:current-trixie-slim")
+# Runtime base: python image hosts the mcp-proxy bridge directly and ships
+# python+pip with no extra apt churn. narsil-mcp itself is a self-contained
+# Rust binary copied from rust-builder, so the runtime needs neither Node
+# nor npm.
+BASE_IMAGE=$(cat ./build_data/base-image 2>/dev/null || echo "python:3.14-slim")
+# Node ONLY appears in the rust-builder stage to compile the embedded Vite
+# frontend (rust-embed bakes the dist/ into the binary). It is never copied
+# into the final runtime image.
+NODE_BUILDER_IMAGE=$(cat ./build_data/node-builder-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/node:current-trixie-slim")
 HAPROXY_IMAGE=$(cat ./build_data/haproxy-image 2>/dev/null || echo "haproxy:lts")
 NARSIL_VERSION=$(cat ./build_data/version 2>/dev/null || exit 1)
 RUST_BASE_IMAGE=$(cat ./build_data/rust-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/rust:slim-trixie")
@@ -56,7 +64,7 @@ else
         echo "ARG NARSIL_VERSION=$NARSIL_VERSION"
         cat << EOF
 FROM $HAPROXY_IMAGE AS haproxy-src
-FROM $BASE_IMAGE AS node-src
+FROM $NODE_BUILDER_IMAGE AS node-src
 
 # ── Rust build stage: compile narsil-mcp with embedded frontend ──
 FROM $RUST_BASE_IMAGE AS rust-builder
@@ -121,12 +129,18 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/banner.sh \\
     && ls -la /etc/haproxy/haproxy.cfg.template
 
 # Install runtime packages
-# python3 + pip stay at runtime to host the mcp-proxy stdio<->HTTP bridge.
+# python:3.14-slim already ships python3 + pip; only the system tools below
+# need apt. No nodejs/npm — narsil-mcp Rust binary is self-contained and
+# mcp-proxy is pure Python.
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget curl procps \\
-    python3 python3-pip python3-venv && \\
+    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget curl procps && \\
     rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale /usr/share/lintian
+
+# Create non-root runtime user. python:3.14-slim has no pre-baked user;
+# entrypoint.sh drops privileges to this account via gosu.
+RUN groupadd -r -g 1000 narsil && \\
+    useradd -r -u 1000 -g narsil -m -d /home/narsil -s /bin/bash narsil
 
 # HAProxy with native QUIC/H3 support from official image
 COPY --from=haproxy-src /usr/local/sbin/haproxy /usr/sbin/haproxy
@@ -146,7 +160,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \\
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 # Create default data directory for repository mounting and state directory for lifecycle sentinels
-RUN mkdir -p /data /state && chown node:node /data /state
+RUN mkdir -p /data /state && chown narsil:narsil /data /state
 
 # Use an ARG for the default port
 ARG PORT=8010

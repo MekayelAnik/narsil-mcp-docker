@@ -82,7 +82,7 @@ services:
       # - "3000:3000"
     volumes:
       - /path/to/your/repos:/data:ro
-      - narsil-cache:/home/node/.cache         # Persist embedding model cache
+      - narsil-cache:/home/narsil/.cache         # Persist embedding model cache
     environment:
       - PORT=8010
       - INTERNAL_PORT=38011
@@ -123,7 +123,7 @@ docker run -d \
   --restart=unless-stopped \
   -p 8010:8010 \
   -v /path/to/your/repos:/data:ro \
-  -v narsil-cache:/home/node/.cache \
+  -v narsil-cache:/home/narsil/.cache \
   -e PORT=8010 \
   -e PROTOCOL=SHTTP \
   -e NARSIL_GIT=true \
@@ -139,7 +139,7 @@ docker run -d \
   -p 8010:8010 \
   -p 3000:3000 \
   -v /path/to/your/repos:/data:ro \
-  -v narsil-cache:/home/node/.cache \
+  -v narsil-cache:/home/narsil/.cache \
   -e PORT=8010 \
   -e PROTOCOL=SHTTP \
   -e NARSIL_GIT=true \
@@ -188,7 +188,7 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | `PUID` | `1000` | Any valid UID | Process user ID |
 | `PGID` | `1000` | Any valid GID | Process group ID |
 | `TZ` | `UTC` | Any timezone | Container timezone |
-| `NODE_ENV` | *(empty)* | `production`, etc. | Node.js environment |
+| `NODE_ENV` | *(empty)* | `production`, etc. | Deployment mode flag (triggers HTTPS-off security warning when set to `production`) |
 | `DATA_DIR` | `/data` | Any path | Directory for mounted repositories |
 
 #### Narsil MCP Feature Flags
@@ -242,7 +242,7 @@ Neural embeddings are **optional**. Without `NARSIL_NEURAL=true`, all 80+ core t
 
 - **API backend** (default): Set `NARSIL_NEURAL=true` + `NARSIL_NEURAL_BACKEND=api` + an API key. Default model is `voyage-code-2` (1024 dims).
 - **ONNX backend** (local, no API key): Set `NARSIL_NEURAL_BACKEND=onnx`. Requires manually downloading the model via `optimum-cli export onnx`. Does not auto-download.
-- **Cache persistence**: The `narsil-cache` volume at `/home/node/.cache` persists model files and ONNX caches across restarts.
+- **Cache persistence**: The `narsil-cache` volume at `/home/narsil/.cache` persists model files and ONNX caches across restarts.
 
 **API backend examples:**
 

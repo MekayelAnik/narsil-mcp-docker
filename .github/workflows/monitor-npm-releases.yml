@@ -46,7 +46,7 @@ on:
           - size-optimized
         default: production
       base_image:
-        description: 'Base image override (example: ghcr.io/mekayelanik/base-images/node:current-trixie-slim)'
+        description: 'Base image override (example: python:3.14-slim). Hosts mcp-proxy + narsil Rust binary; no Node at runtime.'
         required: false
         type: string
         default: ''
@@ -73,7 +73,7 @@ env:
   GHCR_REPO: ${{ vars.GHCR_REPO || format('ghcr.io/{0}/narsil-mcp', github.repository_owner) }}
   DEFAULT_PLATFORMS: ${{ vars.DEFAULT_PLATFORMS || 'linux/amd64,linux/arm64' }}
   EXCLUDE_VERSIONS: ${{ vars.EXCLUDE_VERSIONS || '' }}
-  BASE_IMAGE_DEFAULT: ${{ github.event.inputs.base_image || vars.BASE_IMAGE_DEFAULT || 'ghcr.io/mekayelanik/base-images/node:current-trixie-slim' }}
+  BASE_IMAGE_DEFAULT: ${{ github.event.inputs.base_image || vars.BASE_IMAGE_DEFAULT || 'python:3.14-slim' }}
   HAPROXY_IMAGE: ${{ vars.HAPROXY_IMAGE || 'haproxy:lts' }}
   RUST_BASE_IMAGE: ${{ vars.RUST_BASE_IMAGE || 'ghcr.io/mekayelanik/base-images/rust:slim-trixie' }}
   EXPORT_CACHE_CONCURRENCY: '4'
@@ -230,7 +230,7 @@ jobs:
       versions_json: ${{ needs.fetch-releases.outputs.versions_json }}
       build_profile: ${{ github.event.inputs.build_profile || 'production' }}
       force_build: ${{ needs.fetch-releases.outputs.normalized_force_build }}
-      base_image_default: ${{ github.event.inputs.base_image || vars.BASE_IMAGE_DEFAULT || 'ghcr.io/mekayelanik/base-images/node:current-trixie-slim' }}
+      base_image_default: ${{ github.event.inputs.base_image || vars.BASE_IMAGE_DEFAULT || 'python:3.14-slim' }}
       haproxy_image: ${{ vars.HAPROXY_IMAGE || 'haproxy:lts' }}
       rust_base_image: ${{ vars.RUST_BASE_IMAGE || 'ghcr.io/mekayelanik/base-images/rust:slim-trixie' }}
       ghcr_repo: ${{ vars.GHCR_REPO || format('ghcr.io/{0}/narsil-mcp', github.repository_owner) }}
