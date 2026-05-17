@@ -623,6 +623,21 @@ generate_haproxy_config() {
     escaped_bind_params="$(escape_sed_replacement "$BIND_PARAMS")"
     escaped_quic_bind_line="$(escape_sed_replacement "$QUIC_BIND_LINE")"
 
+    # Concurrency caps. Bound HAProxy-level acceptance so a burst cannot
+    # trigger unbounded upstream mcp-proxy session affinity churn. Empty = no cap.
+    local frontend_maxconn_clause=""
+    local server_maxconn_clause=""
+    if [[ "${HAPROXY_FRONTEND_MAXCONN:-0}" =~ ^[1-9][0-9]*$ ]]; then
+        frontend_maxconn_clause="maxconn ${HAPROXY_FRONTEND_MAXCONN}"
+    fi
+    if [[ "${HAPROXY_SERVER_MAXCONN:-0}" =~ ^[1-9][0-9]*$ ]]; then
+        server_maxconn_clause="maxconn ${HAPROXY_SERVER_MAXCONN}"
+    fi
+    local escaped_frontend_maxconn
+    local escaped_server_maxconn
+    escaped_frontend_maxconn="$(escape_sed_replacement "$frontend_maxconn_clause")"
+    escaped_server_maxconn="$(escape_sed_replacement "$server_maxconn_clause")"
+
     sed -e "s|__SERVER_PORT__|${PORT}|g" \
         -e "s|__BIND_PARAMS__|${escaped_bind_params}|g" \
         -e "s|__QUIC_BIND_LINE__|${escaped_quic_bind_line}|g" \
@@ -630,6 +645,8 @@ generate_haproxy_config() {
         -e "s|__SERVER_NAME__|${HAPROXY_SERVER_NAME}|g" \
         -e "s|__CORS_PREFLIGHT_CONDITION__|${cors_preflight_condition}|g" \
         -e "s|__CORS_RESPONSE_CONDITION__|${cors_response_condition}|g" \
+        -e "s|__FRONTEND_MAXCONN__|${escaped_frontend_maxconn}|g" \
+        -e "s|__SERVER_MAXCONN__|${escaped_server_maxconn}|g" \
         "$HAPROXY_TEMPLATE" > "${HAPROXY_CONFIG}.tmp"
 
     awk -v replacement="$api_key_check" -v replacement_cors="$cors_check" \
@@ -663,10 +680,9 @@ build_narsil_args() {
     # Build the narsil-mcp command arguments from environment variables.
     # Uses a bash array internally so values with spaces / shell metachars
     # (e.g. a DATA_DIR subdir like "/data/My Project") survive correctly.
-    # Supergateway receives the final command via --stdio as a single STRING
-    # that it later re-splits with sh rules, so at the end we serialize the
-    # array with printf '%q' — each token becomes shell-escaped and re-splits
-    # back to the original argv on the other side.
+    # The output is %q-escaped; start_mcp_server reconstructs the argv array
+    # via eval and hands it to mcp-proxy as positional args after `--`. This
+    # preserves spaces, quotes, and shell metachars across the boundary.
     local -a args=()
 
     # ---- Repository discovery -----------------------------------------------
@@ -758,9 +774,10 @@ build_narsil_args() {
     # NARSIL_HTTP_PORT controls the HAProxy-exposed web UI port, not the
     # internal narsil port — intentionally not forwarded to narsil.
 
-    # Serialize: shell-quote each token and join with spaces so supergateway's
-    # re-split reproduces the exact argv. Without %q a path like "/My Dir/r"
-    # would become two separate args.
+    # Serialize: shell-quote each token and join with spaces so a downstream
+    # caller (e.g. `eval "argv=(narsil-mcp $out)"` in start_mcp_server) can
+    # safely reconstruct the argv. Without %q a path like "/My Dir/r" would
+    # split into two separate args.
     local a out=""
     for a in "${args[@]}"; do
         out+="$(printf '%q' "$a") "
@@ -770,46 +787,85 @@ build_narsil_args() {
 }
 
 start_mcp_server() {
-    # Build the Narsil MCP command with configured options
+    # Build the Narsil MCP command with configured options. build_narsil_args
+    # returns a %q-escaped serialization; eval reconstructs the argv array
+    # safely (every token already shell-quoted).
     local narsil_args
     narsil_args="$(build_narsil_args)"
-    local narsil_mcp_cmd="narsil-mcp ${narsil_args}"
+    local -a narsil_argv
+    eval "narsil_argv=(narsil-mcp ${narsil_args})"
 
-    # --stateful keeps ONE stdio child alive across HTTP sessions instead of
-    # respawning narsil per request. --sessionTimeout is critical: without
-    # it supergateway tears the session (and child) down as soon as each
-    # request's response is flushed, which defeats --stateful entirely — the
-    # pre-warmed narsil would be gone before the index-ready poll can see it.
-    # Default timeout is 10 minutes (600_000 ms), plenty of headroom for even
-    # large-repo initial indexing.
-    local SG_STATEFUL_FLAG="${SUPERGATEWAY_STATEFUL:---stateful}"
-    local SG_SESSION_TIMEOUT="${SUPERGATEWAY_SESSION_TIMEOUT:-600000}"
-    local -a SG_SESSION_ARGS=()
-    if [[ "$SG_STATEFUL_FLAG" == "--stateful" ]]; then
-        SG_SESSION_ARGS=(--sessionTimeout "$SG_SESSION_TIMEOUT")
+    # mcp-proxy session model: stateful by default — ONE stdio child is reused
+    # across all requests for a given Mcp-Session-Id, with no server-side TTL
+    # (the session persists until the client explicitly closes it). This is
+    # exactly what narsil needs for long-running initial indexing: the child
+    # cannot be reaped mid-index. Set MCP_PROXY_STATELESS=true only when full
+    # per-request isolation is required (memory-hostile, breaks index gating).
+    MCP_PROXY_STATELESS="${MCP_PROXY_STATELESS:-false}"
+    # Cap virtual memory of each narsil stdio child (MiB; 0 disables).
+    NARSIL_MAX_MEM_MB="${NARSIL_MAX_MEM_MB:-0}"
+
+    # mcp-proxy receives the stdio command as positional args after `--`,
+    # so prlimit can prefix the argv list directly.
+    if [[ "${NARSIL_MAX_MEM_MB}" =~ ^[1-9][0-9]*$ ]] && command -v prlimit >/dev/null 2>&1; then
+        local mem_bytes=$((NARSIL_MAX_MEM_MB * 1024 * 1024))
+        narsil_argv=(prlimit "--as=${mem_bytes}" -- "${narsil_argv[@]}")
+        echo "Narsil MCP child memory cap: ${NARSIL_MAX_MEM_MB} MiB (prlimit --as)"
     fi
 
+    # Build mcp-proxy CORS args. CORS env may be comma-separated origins or "*".
+    local -a cors_args=()
+    if [[ -n "${CORS:-}" ]]; then
+        local origin
+        for origin in ${CORS//,/ }; do
+            cors_args+=(--allow-origin "$origin")
+        done
+    fi
+    cors_args+=(--expose-header Mcp-Session-Id)
+
+    local -a stateless_args=()
+    if [[ "${MCP_PROXY_STATELESS,,}" == "true" ]]; then
+        stateless_args+=(--stateless)
+    else
+        stateless_args+=(--no-stateless)
+    fi
+
+    local mode_tag="stateful"
+    [[ "${MCP_PROXY_STATELESS,,}" == "true" ]] && mode_tag="stateless"
+
     case "${PROTOCOL^^}" in
-        SHTTP|STREAMABLEHTTP)
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
-            PROTOCOL_DISPLAY="SHTTP/streamableHttp"
-            ;;
-        SSE)
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --ssePath /sse --outputTransport sse --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
-            PROTOCOL_DISPLAY="SSE/Server-Sent Events"
+        SHTTP|STREAMABLEHTTP|SSE)
+            # mcp-proxy exposes /mcp (StreamableHTTP) and /sse simultaneously.
+            CMD_ARGS=(mcp-proxy
+                --host 127.0.0.1
+                --port "$INTERNAL_PORT"
+                --pass-environment
+                "${stateless_args[@]}"
+                "${cors_args[@]}"
+                --
+                "${narsil_argv[@]}")
+            PROTOCOL_DISPLAY="mcp-proxy: /mcp (StreamableHTTP) + /sse (${mode_tag})"
             ;;
         WS|WEBSOCKET)
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --messagePath /message --outputTransport ws --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
-            PROTOCOL_DISPLAY="WS/WebSocket"
+            echo "ERROR: WebSocket transport is not supported by mcp-proxy." >&2
+            echo "       Use PROTOCOL=SHTTP or PROTOCOL=SSE instead." >&2
+            return 1
             ;;
         *)
-            echo "Invalid PROTOCOL='${PROTOCOL}', using default ${DEFAULT_PROTOCOL}"
-            CMD_ARGS=(npx --yes supergateway ${SG_STATEFUL_FLAG} "${SG_SESSION_ARGS[@]}" --port "$INTERNAL_PORT" --streamableHttpPath /mcp --outputTransport streamableHttp --healthEndpoint /healthz --stdio "$narsil_mcp_cmd")
-            PROTOCOL_DISPLAY="SHTTP/streamableHttp"
+            echo "Invalid PROTOCOL='${PROTOCOL}', defaulting to ${DEFAULT_PROTOCOL}"
+            CMD_ARGS=(mcp-proxy
+                --host 127.0.0.1
+                --port "$INTERNAL_PORT"
+                --pass-environment
+                "${stateless_args[@]}"
+                "${cors_args[@]}"
+                --
+                "${narsil_argv[@]}")
+            PROTOCOL_DISPLAY="mcp-proxy: /mcp (StreamableHTTP) + /sse (${mode_tag})"
             ;;
     esac
 
-    echo "Launching Narsil MCP Server with protocol: ${PROTOCOL_DISPLAY}"
+    echo "Launching Narsil MCP via ${PROTOCOL_DISPLAY}"
     echo "Narsil MCP args: ${narsil_args}"
 
     if [ "$(id -u)" -eq 0 ]; then
@@ -837,11 +893,14 @@ start_mcp_server() {
     done
 
     # ---- Pre-warm: force narsil spawn + index start immediately -------------
-    # Supergateway's stdio mode in --stateful mode spawns the narsil child on
-    # the FIRST initialize request. We send that initialize here so indexing
-    # starts at container boot, not on first external client connection.
-    # In stateful mode the transport returns a Mcp-Session-Id header that must
-    # be echoed on every subsequent request — capture it for the poll loop.
+    # mcp-proxy spawns the narsil stdio child on the FIRST initialize request
+    # (stateful mode). We send that initialize here so indexing starts at
+    # container boot, not on first external client connection. The transport
+    # returns a Mcp-Session-Id header that must be echoed on every subsequent
+    # request — capture it for the index-ready poll and keepalive loop.
+    # Sessions persist until the client closes them (no server-side TTL), so
+    # the pre-warmed child is guaranteed to be the one the index-ready check
+    # sees.
     local mcp_path="/mcp"
     case "${PROTOCOL^^}" in
         SSE) mcp_path="/sse" ;;
@@ -853,7 +912,7 @@ start_mcp_server() {
     prewarm_headers="$(mktemp)"
     local MCP_SID=""
     local attempt
-    # Retry pre-warm up to 10x (2s each) — supergateway may bind port before
+    # Retry pre-warm up to 10x (2s each) — mcp-proxy may bind the port before
     # the streamableHttp route is fully wired, racing the first POST.
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
         : > "$prewarm_headers"
@@ -922,15 +981,16 @@ start_mcp_server() {
 }
 
 start_keepalive() {
-    # Keep the supergateway-managed narsil-mcp stdio child alive across idle
-    # periods. Without this, supergateway reaps the child after
-    # SUPERGATEWAY_SESSION_TIMEOUT (default 600s) of inactivity, which closes
-    # the embedded HTTP server on WEB_UI_INTERNAL_PORT and breaks the web UI
-    # (HAProxy returns 503 SC--).
+    # Keep the mcp-proxy-managed narsil-mcp stdio child reachable across idle
+    # periods. mcp-proxy stateful mode has NO server-side session TTL — the
+    # child should persist until the client closes the session — but this
+    # loop provides belt-and-suspenders insurance: if the session is ever
+    # invalidated (process restart, client disconnect, transient network
+    # error), the loop re-initializes to obtain a fresh session id, ensuring
+    # the embedded narsil web UI on WEB_UI_INTERNAL_PORT keeps responding.
     #
-    # The loop pings tools/list at KEEPALIVE_INTERVAL (default 240s, well under
-    # the 600s timeout). If the session was reaped between ticks, re-initialize
-    # to obtain a fresh session id and continue.
+    # The loop pings tools/list at KEEPALIVE_INTERVAL (default 240s). On a
+    # missing/invalid session it re-initializes and continues.
     if [[ "${NARSIL_KEEPALIVE:-true}" != "true" ]]; then
         echo "Keepalive disabled (NARSIL_KEEPALIVE=${NARSIL_KEEPALIVE:-true})"
         return 0

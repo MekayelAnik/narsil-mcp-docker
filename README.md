@@ -25,7 +25,7 @@ This is an unofficial, community-maintained Docker image that packages the [Nars
 ### Key Features
 
 - **Multi-Architecture Support** - Native support for x86-64 and ARM64
-- **Multiple Transport Protocols** - Streamable HTTP, SSE, and WebSocket support (selectable via env var)
+- **Modern MCP Bridge** - [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) stdio↔StreamableHTTP/SSE; stateful, one shared child per session (no spawn-per-request leak)
 - **90 Code Intelligence Tools** - Symbol search, call graphs, security analysis, SBOM, and more
 - **32 Language Support** - Rust, Python, TypeScript, Go, Java, C#, and 26 more via Tree-sitter
 - **Secure by Design** - API key auth (case-insensitive Bearer), CORS, TLS termination, security headers
@@ -155,7 +155,6 @@ docker run -d \
 |:--------|:---------|:------------|
 | **MCP (SHTTP)** | `http://host-ip:8010/mcp` | Streamable HTTP MCP endpoint (recommended) |
 | **MCP (SSE)** | `http://host-ip:8010/sse` | Server-Sent Events MCP endpoint |
-| **MCP (WS)** | `ws://host-ip:8010/message` | WebSocket MCP endpoint |
 | **HTTP Frontend** | `http://host-ip:3000` | Visualization frontend (requires `NARSIL_HTTP=true`) |
 | **Health** | `http://host-ip:8010/healthz` | Health check endpoint |
 
@@ -180,8 +179,12 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | Variable | Default | Possible Values | Description |
 |:---------|:-------:|:----------------|:------------|
 | `PORT` | `8010` | `1`-`65535` | External HAProxy listening port |
-| `INTERNAL_PORT` | `38011` | `1`-`65535` | Internal supergateway port (do not expose) |
-| `PROTOCOL` | `SHTTP` | `SHTTP`, `SSE`, `WS` | MCP transport. `SHTTP`=per-session narsil (isolation); `SSE`=one shared narsil (faster reconnects, use for multi-client) |
+| `INTERNAL_PORT` | `38011` | `1`-`65535` | Internal mcp-proxy port (do not expose) |
+| `PROTOCOL` | `SHTTP` | `SHTTP`, `SSE` | MCP transport. mcp-proxy exposes both `/mcp` and `/sse` simultaneously; this flag chooses the default routed path. WS removed (unsupported by mcp-proxy) |
+| `MCP_PROXY_STATELESS` | `false` | `true`, `false` | mcp-proxy mode. `false`=stateful (shared stdio child, no TTL — required for narsil's index-ready gate); `true`=per-request isolation (memory-hostile, breaks indexing) |
+| `NARSIL_MAX_MEM_MB` | `0` | `0`-`N` | `prlimit --as` MiB cap per narsil stdio child (0=off) |
+| `HAPROXY_FRONTEND_MAXCONN` | `0` | `0`-`N` | HAProxy frontend max concurrent client conns (0=off) |
+| `HAPROXY_SERVER_MAXCONN` | `0` | `0`-`N` | HAProxy→mcp-proxy max concurrent conns (0=off) |
 | `PUID` | `1000` | Any valid UID | Process user ID |
 | `PGID` | `1000` | Any valid GID | Process group ID |
 | `TZ` | `UTC` | Any timezone | Container timezone |
@@ -301,10 +304,10 @@ Neural embeddings are **optional**. Without `NARSIL_NEURAL=true`, all 80+ core t
 
 | Variable | Default | Description |
 |:---------|:-------:|:------------|
-| `WAIT_FOR_INDEX` | `true` | Block HAProxy startup until narsil finishes initial indexing. Set `false` for empty-repo dev or `SHTTP` mode where the pre-warmed narsil dies with its session anyway |
+| `WAIT_FOR_INDEX` | `true` | Block HAProxy startup until narsil finishes initial indexing. Set `false` for empty-repo dev setups |
 | `INDEX_READY_TIMEOUT` | `300` | Seconds to wait for indexing before giving up and starting HAProxy anyway |
-| `SUPERGATEWAY_STATEFUL` | `--stateful` | Supergateway flag for stateful streamable-HTTP sessions. Set to empty string to disable |
-| `SUPERGATEWAY_SESSION_TIMEOUT` | `600000` | Milliseconds an idle session lives before the stdio child is reaped. Only applies when `--stateful` is on |
+| `NARSIL_KEEPALIVE` | `true` | Periodic `tools/list` ping to keep the embedded narsil web UI HTTP server reachable. Insurance only — mcp-proxy stateful has no server-side TTL |
+| `KEEPALIVE_INTERVAL` | `240` | Seconds between keepalive pings |
 
 ### API Key Authentication Notes
 
@@ -418,7 +421,7 @@ This Docker image packaging is licensed under the [GNU General Public License v3
 ### Upstream Licenses
 
 - **Narsil MCP Server**: [MIT License](https://github.com/postrv/narsil-mcp/blob/main/LICENSE-MIT) OR [Apache License 2.0](https://github.com/postrv/narsil-mcp/blob/main/LICENSE-APACHE) - Copyright (c) 2024 postrv
-- **Supergateway**: MIT License
+- **[mcp-proxy](https://github.com/sparfenyuk/mcp-proxy)**: MIT License (stdio↔SHTTP/SSE bridge; replaces supergateway)
 - **HAProxy**: GNU General Public License v2.0
 
 This is an **unofficial** community packaging. It is NOT affiliated with, endorsed by, or supported by the narsil-mcp authors. See [NOTICE](NOTICE) for full attribution.

@@ -7,7 +7,13 @@ HAPROXY_IMAGE=$(cat ./build_data/haproxy-image 2>/dev/null || echo "haproxy:lts"
 NARSIL_VERSION=$(cat ./build_data/version 2>/dev/null || exit 1)
 RUST_BASE_IMAGE=$(cat ./build_data/rust-image 2>/dev/null || echo "ghcr.io/mekayelanik/base-images/rust:slim-trixie")
 NARSIL_REPO='postrv/narsil-mcp'
-SUPERGATEWAY_PKG='supergateway@latest'
+# mcp-proxy: stdio<->StreamableHTTP/SSE bridge. Replaces supergateway.
+# Stateful by default (one stdio child per Mcp-Session-Id, reused across
+# requests, no server-side TTL) — avoids both the spawn-per-request memory
+# leak in supergateway stateless mode (supercorp-ai/supergateway#108) AND the
+# session-reaped-mid-index bug that the supergateway --sessionTimeout
+# workaround only partially mitigated.
+MCP_PROXY_PKG=$(cat ./build_data/mcp_proxy_version 2>/dev/null || echo "mcp-proxy")
 DOCKERFILE_NAME="Dockerfile.$REPO_NAME"
 
 # ── Determine Cargo feature set based on narsil-mcp version ──
@@ -115,9 +121,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/banner.sh \\
     && ls -la /etc/haproxy/haproxy.cfg.template
 
 # Install runtime packages
+# python3 + pip stay at runtime to host the mcp-proxy stdio<->HTTP bridge.
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget curl procps && \\
+    bash haproxy gosu netcat-openbsd openssl ca-certificates iproute2 tzdata git wget curl procps \\
+    python3 python3-pip python3-venv && \\
     rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale /usr/share/lintian
 
 # HAProxy with native QUIC/H3 support from official image
@@ -128,12 +136,13 @@ RUN mkdir -p /usr/local/sbin && ln -sf /usr/sbin/haproxy /usr/local/sbin/haproxy
 COPY --from=rust-builder /usr/local/bin/narsil-mcp /usr/local/bin/narsil-mcp
 RUN chmod +x /usr/local/bin/narsil-mcp
 
-# Install Supergateway
-RUN --mount=type=cache,target=/root/.npm \\
-    echo "Installing Supergateway..." && \\
-    npm install -g ${SUPERGATEWAY_PKG} --omit=dev --no-audit --no-fund --loglevel error && \\
+# Install mcp-proxy (replaces supergateway — stateful bridge with no
+# server-side session TTL, avoids the mid-index session-reap bug).
+RUN --mount=type=cache,target=/root/.cache/pip \\
+    echo "Installing mcp-proxy..." && \\
+    pip install --no-cache-dir --break-system-packages ${MCP_PROXY_PKG} && \\
+    mcp-proxy --version || true && \\
     rm -rf /tmp/* /var/tmp/* && \\
-    rm -rf /usr/local/lib/node_modules/npm/man /usr/local/lib/node_modules/npm/docs /usr/local/lib/node_modules/npm/html && \\
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 # Create default data directory for repository mounting and state directory for lifecycle sentinels

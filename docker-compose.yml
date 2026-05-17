@@ -13,6 +13,17 @@ services:
       - ENABLE_HTTPS=false
       - HTTP_VERSION_MODE=auto
       - DATA_DIR=/data
+      # mcp-proxy session model. Stateful by default — one stdio child per
+      # Mcp-Session-Id, reused across requests. Sessions persist until the
+      # client explicitly closes them (no server-side TTL). Set to "true"
+      # only if full per-request isolation is required (memory-hostile,
+      # breaks the index-ready gate).
+      - MCP_PROXY_STATELESS=false
+      # Cap virtual memory of each narsil stdio child (MiB; 0 disables)
+      - NARSIL_MAX_MEM_MB=4096
+      # HAProxy concurrency caps (0 disables)
+      - HAPROXY_FRONTEND_MAXCONN=64
+      - HAPROXY_SERVER_MAXCONN=16
       # Narsil MCP feature flags
       - NARSIL_GIT=true
       - NARSIL_CALL_GRAPH=true
