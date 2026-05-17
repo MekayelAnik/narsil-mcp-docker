@@ -181,7 +181,7 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 |:---------|:-------:|:----------------|:------------|
 | `PORT` | `8010` | `1`-`65535` | External HAProxy listening port |
 | `INTERNAL_PORT` | `38011` | `1`-`65535` | Internal supergateway port (do not expose) |
-| `PROTOCOL` | `SHTTP` | `SHTTP`, `SSE`, `WS` | MCP transport protocol |
+| `PROTOCOL` | `SHTTP` | `SHTTP`, `SSE`, `WS` | MCP transport. `SHTTP`=per-session narsil (isolation); `SSE`=one shared narsil (faster reconnects, use for multi-client) |
 | `PUID` | `1000` | Any valid UID | Process user ID |
 | `PGID` | `1000` | Any valid GID | Process group ID |
 | `TZ` | `UTC` | Any timezone | Container timezone |
@@ -211,6 +211,7 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 |:---------|:-------:|:----------------|:------------|
 | `NARSIL_INDEX_PATH` | `~/.cache/narsil-mcp` | Any path | Custom persistent index storage path |
 | `NARSIL_DISCOVER` | *(empty)* | Directory path | Auto-discover repositories in a directory path |
+| `NARSIL_REPOS_MODE` | `auto` | `auto`, `single`, `subdirs` | How `DATA_DIR` is interpreted. `auto`=single if `DATA_DIR/.git` exists else subdirs; `subdirs`=each immediate subdir is a separate `--repos` |
 | `NARSIL_HTTP_PORT` | `3000` | `1`-`65535` | HTTP visualization frontend port |
 | `NARSIL_NO_CACHE` | `false` | `true`, `false` | Disable analysis caching |
 | `NARSIL_CACHE_TTL` | `1800` | Integer (seconds) | Cache TTL in seconds |
@@ -230,6 +231,7 @@ When HTTPS is enabled (`ENABLE_HTTPS=true`), use TLS endpoints:
 | `VOYAGE_API_KEY` | *(empty)* | Voyage AI specific API key |
 | `OPENAI_API_KEY` | *(empty)* | OpenAI specific API key |
 | `EMBEDDING_SERVER_ENDPOINT` | *(empty)* | Custom embedding API endpoint URL |
+| `GITHUB_TOKEN` | *(empty)* | PAT for `NARSIL_REMOTE=true`. `repo` scope enables private repos; raises GitHub API rate limit from 60/h to 5000/h |
 
 #### Neural Embedding Notes
 
@@ -293,7 +295,16 @@ Neural embeddings are **optional**. Without `NARSIL_NEURAL=true`, all 80+ core t
 
 > **Once per container lifecycle:** `NARSIL_REINDEX` runs only once after the container is created. It is skipped on subsequent restarts (e.g., crash recovery, `docker restart`). To re-trigger, recreate the container (`docker compose down && docker compose up -d`).
 
-> **Healthcheck:** The container's healthcheck has a 60-second start period to accommodate slow startups, especially when `NARSIL_REINDEX=true` or `NARSIL_NEURAL=true` triggers initial indexing or model loading.
+> **Healthcheck:** The container's healthcheck has a 450-second start period to accommodate the index-ready gate (see `WAIT_FOR_INDEX` below) plus initial indexing/model loading.
+
+#### Gateway & Startup Lifecycle
+
+| Variable | Default | Description |
+|:---------|:-------:|:------------|
+| `WAIT_FOR_INDEX` | `true` | Block HAProxy startup until narsil finishes initial indexing. Set `false` for empty-repo dev or `SHTTP` mode where the pre-warmed narsil dies with its session anyway |
+| `INDEX_READY_TIMEOUT` | `300` | Seconds to wait for indexing before giving up and starting HAProxy anyway |
+| `SUPERGATEWAY_STATEFUL` | `--stateful` | Supergateway flag for stateful streamable-HTTP sessions. Set to empty string to disable |
+| `SUPERGATEWAY_SESSION_TIMEOUT` | `600000` | Milliseconds an idle session lives before the stdio child is reaped. Only applies when `--stateful` is on |
 
 ### API Key Authentication Notes
 
