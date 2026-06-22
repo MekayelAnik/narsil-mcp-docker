@@ -246,7 +246,7 @@ jobs:
           echo "rust_base_image=$(trim '${{ inputs.rust_base_image }}')" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Resolve build profile
         id: profile
@@ -412,7 +412,7 @@ jobs:
 
       - name: Checkout
         if: steps.check-digests.outputs.has_digests == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup build environment
         if: steps.check-digests.outputs.has_digests == 'true'
