@@ -410,7 +410,7 @@ All use the same JSON format. Configure in the respective config file:
 | Tag | Platform | Description |
 |:----|:---------|:------------|
 | `latest` | `amd64`, `arm64` | Latest stable release |
-| `1.7.0` | `amd64`, `arm64` | Specific version |
+| `1.7.1` | `amd64`, `arm64` | Specific version |
 
 ---
 
